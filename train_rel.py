@@ -2,6 +2,7 @@ import argparse, json, random, torch, time, numpy as np
 from utils_tmux import start_gen_and_eval_sessions
 from evalserv_client import EvaluationServiceClient
 from genserv_client import GenerationServiceClient
+from backprop_worker import BackpropWorker
 from collections import Counter
 from tasks import get_task
 
@@ -10,16 +11,22 @@ parser = argparse.ArgumentParser()
 # Basics
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
-parser.add_argument("--degree", type=int, default=200)
+parser.add_argument("--degree", type=int, default=100)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
+
+# Backprop
+parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
+parser.add_argument("--learning_rate", type=float, default=1e-5)
+parser.add_argument("--model_save_path", type=str, default="checkpoints/reliability_model")
 
 args = parser.parse_args()
 
-# start_gen_and_eval_sessions()
-CURRENT_LATEST_MODEL_PATH = args.base_model
+start_gen_and_eval_sessions()
 
 assistant_gen_client = GenerationServiceClient(base_url=f"http://localhost:5000")
 eval_client = EvaluationServiceClient(base_url=f"http://localhost:5001")
+
+backprop_worker = BackpropWorker()
 
 with open(args.dataset_fn, "r") as f:
     data = json.load(f)
@@ -28,8 +35,6 @@ data = [d for d in data if d["task"] == "code"]
 sample = random.choice(data)
 
 task = get_task(sample["task"])
-
-# load_result = assistant_gen_client.load_model(CURRENT_LATEST_MODEL_PATH, num_gpus=args.num_gpus) # Be careful, this shouldn't be commented by default
 
 def generate_responses(conversation, degree):
 
@@ -74,17 +79,39 @@ input_prompt = task.populate_fully_specific_prompt(sample)
 
 conversation = [{"role": "system", "content": system_message}, {"role": "user", "content": input_prompt}]
 
+CURRENT_LATEST_MODEL_PATH = args.base_model
+iteration = 0
+
 while True:
+    # Step 1: Forward
+    # Step 1a: Load the model on vllm backend
+    load_result = assistant_gen_client.load_model(CURRENT_LATEST_MODEL_PATH, num_gpus=args.num_gpus) # Be careful, this shouldn't be commented by default
+    # print(f"Model load result: {load_result}")
+
+    # Step 1b: Generate responses
     responses = generate_responses(conversation, args.degree)
 
     mean_score = np.mean([response["score"] for response in responses])
-    print(f"Mean score: {mean_score}")
+    print_colored(f"Mean score: {mean_score}", "green")
 
+    # Step 1c: Unload the model
+    unload_result = assistant_gen_client.unload_model()
+    # print(f"Model unload result: {unload_result}")
 
-    for response in responses:
-        response["advantage"] = response["score"] - mean_score
-
-        # print(response["response_text"])
-        print(response["score"])
-        print(response["advantage"])
-        print("-" * 100)
+    # Step 2: Backprop
+    MODEL_PATH = f"{args.model_save_path}_iter{iteration}"
+    
+    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
+    
+    print(f"\n[Train] Starting backprop with {len(responses)} responses")
+    backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=responses, args_dict=backprop_args, timeout=600)
+    
+    if backprop_results and backprop_results["any_updates"]:
+        print(f"[Train] Backprop successful! Model saved to {MODEL_PATH}")
+        print(f"[Train] Timings: {backprop_results['timings']}")
+        CURRENT_LATEST_MODEL_PATH = MODEL_PATH
+    else:
+        print(f"[Train] No backprop updates applied")
+    
+    iteration += 1
+    print(f"\n[Train] Completed iteration {iteration}\n")
