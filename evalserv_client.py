@@ -1,7 +1,5 @@
-import requests
-import json
-import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
+import requests, json, time
 
 class EvaluationServiceClient:
     """Client for the Flask Evaluation Service"""
