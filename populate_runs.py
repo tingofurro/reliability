@@ -3,6 +3,7 @@ from evalserv_client import EvaluationServiceClient
 import argparse, json, torch, random, tqdm, time
 from concurrent.futures import ThreadPoolExecutor
 from utils_logs import get_log_counts, log_single_run
+from llms import generate
 from tasks import get_task
 
 parser = argparse.ArgumentParser()
@@ -50,26 +51,25 @@ def populate_single_run(sample):
 
     conversation = [{"role": "system", "content": system_message}, {"role": "user", "content": input_prompt}]
 
-    job_schedule_result = assistant_gen_client.schedule_job(conversation, n_responses=1)
+    # job_schedule_result = assistant_gen_client.schedule_job(conversation, n_responses=1)
     
-    job_status = {"status": "pending"}
-    while job_status["status"] != "completed":
-        job_status = assistant_gen_client.check_job(job_schedule_result["job_id"])
-        time.sleep(0.2)
+    # job_status = {"status": "pending"}
+    # while job_status["status"] != "completed":
+    #     job_status = assistant_gen_client.check_job(job_schedule_result["job_id"])
+    #     time.sleep(0.2)
     
-    response = job_status["responses"][0]
+    # response = job_status["responses"][0]
+    response_text = generate(conversation, model=args.model_name, max_tokens=2000)
 
-    this_conversation = conversation + [{"role": "assistant", "content": response["response_text"]}]
+    this_conversation = conversation + [{"role": "assistant", "content": response_text}]
     eval_schedule_result = eval_client.schedule_evaluation(this_conversation, sample["task"], sample)
     eval_status = {"status": "pending"}
     while eval_status["status"] != "completed":
         eval_status = eval_client.check_job(eval_schedule_result["job_id"])
         time.sleep(0.2)
-    
-    eval_result = eval_status["result"]["evaluation_return"]
-    
-    # print(f"Sample: {sample['task_id']} | Response: {response['response_text']} | Eval Result: {eval_result}")
-    log_single_run(logs_path, {"task_id": sample["task_id"], "model_name": args.model_name, "response": response["response_text"], "eval_result": eval_result})
+    if "evaluation_return" in eval_status["result"]:
+        eval_result = eval_status["result"]["evaluation_return"]
+        log_single_run(logs_path, {"task_id": sample["task_id"], "model_name": args.model_name, "response": response_text, "eval_result": eval_result})
 
 
 num_workers = args.num_gpus * args.max_concurrent_jobs_per_worker
