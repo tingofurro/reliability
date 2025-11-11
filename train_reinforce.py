@@ -1,28 +1,49 @@
-import argparse, json, random, torch, time, numpy as np
-from utils_tmux import start_gen_and_eval_sessions
+import argparse, json, random, torch, time, numpy as np, re, os
+from llms.genserv.client import GenerationServiceClient
 from evalserv_client import EvaluationServiceClient
-from genserv_client import GenerationServiceClient
 from backprop_worker import BackpropWorker
+from utils_experiments import make_exp_folder
 from utils import print_colored
 from collections import Counter
 from tasks import get_task
+
+def extract_answer(response):
+    # extract everything between ```python and ```
+    return response.split("```python")[1].split("```")[0]
 
 parser = argparse.ArgumentParser()
 
 # Basics
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
+parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
 parser.add_argument("--degree", type=int, default=100)
+parser.add_argument("--num_eval_runs", type=int, default=1000)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
-parser.add_argument("--learning_rate", type=float, default=1e-5)
-parser.add_argument("--model_save_path", type=str, default="checkpoints/reliability_model")
+parser.add_argument("--learning_rate", type=float, default=2e-3)
+parser.add_argument("--effective_batch_size", type=int, default=16)
 
 args = parser.parse_args()
 
-start_gen_and_eval_sessions()
+# start_gen_and_eval_sessions()
+
+exp_folder = make_exp_folder()
+print(f"Experiment folder: {exp_folder}")
+model_save_path = os.path.join(exp_folder, "model")
+if not os.path.exists(model_save_path):
+    os.makedirs(model_save_path, exist_ok=True)
+
+args_path = os.path.join(exp_folder, "args.json")
+run_params = vars(args)
+run_params["experiment_name"] = exp_folder.split("/")[-1]
+run_params["training_method"] = "reinforce"
+with open(args_path, "w") as f:
+    json.dump(run_params, f, indent=4)
+
+logs_path = os.path.join(exp_folder, "logs.jsonl")
 
 assistant_gen_client = GenerationServiceClient(base_url=f"http://localhost:5000")
 eval_client = EvaluationServiceClient(base_url=f"http://localhost:5001")
@@ -33,7 +54,7 @@ with open(args.dataset_fn, "r") as f:
     data = json.load(f)
 
 data = [d for d in data if d["task"] == "code"]
-sample = random.choice(data)
+sample = [d for d in data if d["task_id"] == args.task_id][0]
 
 task = get_task(sample["task"])
 
@@ -90,22 +111,42 @@ while True:
     # print(f"Model load result: {load_result}")
 
     # Step 1b: Generate responses
-    responses = generate_responses(conversation, args.degree)
+    responses = generate_responses(conversation, args.degree + args.num_eval_runs)
 
-    mean_score = np.mean([response["score"] for response in responses])
-    print_colored(f"Mean score: {mean_score}", "green")
+    for response in responses:
+        response["answer"] = extract_answer(response["response_text"])
+        response["answer2"] = re.sub(r'(\"\"\".*?\"\"\"|\'\'\'.*?\'\'\'|#.*?$)', '', response["answer"], flags=re.DOTALL | re.MULTILINE)
+        response["answer2"] = "\n".join([line for line in response["answer2"].split("\n") if line.strip()]) # remove any empty lines
+
+    random.shuffle(responses)
+
+    train_responses = responses[:args.degree]
+    eval_responses = responses[args.degree:]
+
+    # compute the uniqueness of the answers
+    unique_answers = set([response["answer2"] for response in eval_responses])
+
+    response_logprobs = [response["logprobs"] for response in responses]
+    # print("RESPONSE LOGPROBS:")
+    # print(response_logprobs)
+
+    mean_train_score = np.mean([response["score"] for response in train_responses])
+    mean_eval_score = np.mean([response["score"] for response in eval_responses])
+    uniqueness = 100.0 * len(unique_answers) / len(eval_responses)
+    print_colored(f"Mean train score: {mean_train_score}", "green")
+    print_colored(f"Mean eval score: {mean_eval_score} (Uniqueness: {len(unique_answers) / len(eval_responses)} ({uniqueness:.2f}))", "green")
 
     # Step 1c: Unload the model
     unload_result = assistant_gen_client.unload_model()
     # print(f"Model unload result: {unload_result}")
 
     # Step 2: Backprop
-    MODEL_PATH = f"{args.model_save_path}"
+    MODEL_PATH = f"{model_save_path}"
     
-    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
+    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum", "effective_batch_size": args.effective_batch_size}
     
     print(f"\n[Train] Starting backprop with {len(responses)} responses")
-    backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=responses, args_dict=backprop_args, timeout=600)
+    backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=train_responses, args_dict=backprop_args, timeout=600)
     
     if backprop_results and backprop_results["any_updates"]:
         print(f"[Train] Backprop successful! Model saved to {MODEL_PATH}")
@@ -114,5 +155,15 @@ while True:
     else:
         print(f"[Train] No backprop updates applied")
     
+
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(eval_responses), "num_train_responses": len(train_responses), "uniqueness": uniqueness}
+    with open(logs_path, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
     iteration += 1
+
+    if mean_eval_score >= 0.99 or iteration >= 100:
+        print(f"\n[Train] Completed iteration {iteration}\n")
+        break
     print(f"\n[Train] Completed iteration {iteration}\n")
+print(f"\n[Train] Completed all iterations\n")

@@ -28,6 +28,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     
     reduction = args_dict.get("reduction", "sum")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
+    effective_batch_size = args_dict.get("effective_batch_size", 16)
 
     # Load model and optimizer
     T_model_load_start = time.time()
@@ -84,36 +85,51 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             selected_advantages = advantages
         
         print(f"[Backprop Worker] Using {len(selected_responses)} responses for backprop")
+        print(f"[Backprop Worker] Using effective batch size of {effective_batch_size}")
         
-        # Get logprobs for each response
-        response_logprobs = []
-        for i, response in enumerate(selected_responses):
-            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
-            response_logprobs.append(logprob)
-            
-            if (i + 1) % 10 == 0:
-                print(f"[Backprop Worker] Processed {i + 1}/{len(selected_responses)} responses")
+        # Process responses in batches with gradient accumulation
+        num_batches = (len(selected_responses) + effective_batch_size - 1) // effective_batch_size
+        print(f"[Backprop Worker] Processing {num_batches} batches")
         
-        response_logprobs = torch.stack(response_logprobs)
-        
-        # Check for unstable logprobs
-        if any(logprob < -1000 for logprob in response_logprobs):
-            print_colored("[Backprop Worker] Skipping backprop because of unstable logprobs", "red")
-        else:
-            loss = -torch.sum(selected_advantages * response_logprobs)
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * effective_batch_size
+            end_idx = min(start_idx + effective_batch_size, len(selected_responses))
+            batch_responses = selected_responses[start_idx:end_idx]
+            batch_advantages = selected_advantages[start_idx:end_idx]
             
-            print(f"[Backprop Worker] Loss: {loss.item():.4f}")
-            losses.append(loss.item())
-            loss.backward()
+            print(f"[Backprop Worker] Processing batch {batch_idx + 1}/{num_batches} (responses {start_idx}-{end_idx})")
             
-            if not torch.isnan(loss).any():
-                torch.nn.utils.clip_grad_norm_(assistant_model.model.parameters(), max_norm=4.0)
-                optimizer.step()
-                optimizer.zero_grad()
-                any_updates = True
-                print_colored("[Backprop Worker] Backprop update applied successfully", "green")
-            else:
-                print_colored("[Backprop Worker] NaN in loss; skipping update", "red")
+            # print(conversation)
+            # Get logprobs for this batch
+            batch_logprobs = []
+            for response in batch_responses:
+                logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
+                # print(logprob, response["logprobs"])
+                batch_logprobs.append(logprob)
+            
+            batch_logprobs = torch.stack(batch_logprobs)
+            
+            # Check for unstable logprobs
+            if any(logprob < -1000 for logprob in batch_logprobs):
+                print_colored(f"[Backprop Worker] Batch {batch_idx + 1} has unstable logprobs, skipping", "yellow")
+                continue
+            
+            # Compute loss for this batch (normalized by batch size)
+            batch_loss = -torch.sum(batch_advantages * batch_logprobs) / num_batches
+            
+            # Backward pass - accumulates gradients
+            optimizer.zero_grad()
+            batch_loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(assistant_model.model.parameters(), max_norm=4.0)
+            optimizer.step()
+            any_updates = True
+            print_colored("[Backprop Worker] Backprop update applied successfully", "green")
+
+            # Clear tensors to save memory
+            del batch_logprobs, batch_loss
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            print(f"[Backprop Worker] Batch {batch_idx + 1}/{num_batches} completed")
         
         T_backprop_end = time.time()
         timings["backprop"] = T_backprop_end - T_backprop_start
