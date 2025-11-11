@@ -3,6 +3,7 @@ from utils_tmux import start_gen_and_eval_sessions
 from evalserv_client import EvaluationServiceClient
 from genserv_client import GenerationServiceClient
 from backprop_worker import BackpropWorker
+from utils import print_colored
 from collections import Counter
 from tasks import get_task
 
@@ -99,7 +100,7 @@ while True:
     # print(f"Model unload result: {unload_result}")
 
     # Step 2: Backprop
-    MODEL_PATH = f"{args.model_save_path}_iter{iteration}"
+    MODEL_PATH = f"{args.model_save_path}"
     
     backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
     
