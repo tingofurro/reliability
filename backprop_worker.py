@@ -67,23 +67,27 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
         else:
             raise ValueError(f"Unknown advantage_estimation: {advantage_estimation}")
         
-        advantages = torch.tensor(advantages).to(assistant_model.device)
+
         print(f"[Backprop Worker] Advantages computed using {advantage_estimation}")
         print(f"[Backprop Worker] Advantages: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}")
         
+
+        for response, advantage in zip(responses, advantages):
+            response["advantage"] = advantage
+
         # Filter out responses with zero advantage if using zero_mean_noneg
+        selected_responses = [response for response in responses if response["logprobs"] > -1000]
         if advantage_estimation == "zero_mean_noneg":
-            selected_indices = [i for i, adv in enumerate(advantages) if adv > 0]
-            if len(selected_indices) == 0:
-                print_colored("[Backprop Worker] No responses with positive advantage, skipping backprop", "yellow")
-                result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses)})
-                return
-            selected_responses = [responses[i] for i in selected_indices]
-            selected_advantages = advantages[selected_indices]
-        else:
-            selected_responses = responses
-            selected_advantages = advantages
-        
+            selected_responses = [response for response in selected_responses if response["advantage"] > 0]
+
+        selected_advantages = torch.tensor([response["advantage"] for response in selected_responses]).to(assistant_model.device)
+
+        if len(selected_responses) == 0:
+            print_colored("[Backprop Worker] No responses with positive advantage, skipping backprop", "yellow")
+            result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses)})
+            return
+
+
         print(f"[Backprop Worker] Using {len(selected_responses)} responses for backprop")
         print(f"[Backprop Worker] Using effective batch size of {effective_batch_size}")
         
@@ -108,11 +112,6 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
                 batch_logprobs.append(logprob)
             
             batch_logprobs = torch.stack(batch_logprobs)
-            
-            # Check for unstable logprobs
-            if any(logprob < -1000 for logprob in batch_logprobs):
-                print_colored(f"[Backprop Worker] Batch {batch_idx + 1} has unstable logprobs, skipping", "yellow")
-                continue
             
             # Compute loss for this batch (normalized by batch size)
             batch_loss = -torch.sum(batch_advantages * batch_logprobs) / num_batches
