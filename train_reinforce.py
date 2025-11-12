@@ -23,7 +23,7 @@ parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
-parser.add_argument("--learning_rate", type=float, default=2e-3)
+parser.add_argument("--learning_rate", type=float, default=5e-3)
 parser.add_argument("--effective_batch_size", type=int, default=16)
 
 args = parser.parse_args()
@@ -85,11 +85,11 @@ def generate_responses(conversation, degree):
         for job_info in active_eval_jobs:
             job_result = eval_client.check_job(job_info["job_id"])
             status_counts[job_result["status"]] += 1
-            if job_result["status"] == "completed":
+            if job_result["status"] == "completed" and "evaluation_return" in job_result["result"]:
                 active_eval_jobs.remove(job_info)
                 response = eval_job_id2response[job_info["job_id"]]
                 response["score"] = job_result["result"]["evaluation_return"]["score"]
-            elif job_result["status"] == "error":
+            elif job_result["status"] == "error" or (job_result["status"] == "completed" and "evaluation_return" not in job_result["result"]):
                 active_eval_jobs.remove(job_info)
                 response = eval_job_id2response[job_info["job_id"]]
                 response["score"] = 0
