@@ -1,9 +1,9 @@
 import argparse, json, random, torch, time, numpy as np, re, os
 from llms.genserv.client import GenerationServiceClient
 from evalserv_client import EvaluationServiceClient
-from backprop_worker import BackpropWorker
 from utils_experiments import make_exp_folder
-from utils import print_colored
+from utils import print_colored, DoublePrint
+from backprop_worker import BackpropWorker
 from collections import Counter
 from tasks import get_task
 
@@ -44,6 +44,9 @@ with open(args_path, "w") as f:
     json.dump(run_params, f, indent=4)
 
 logs_path = os.path.join(exp_folder, "logs.jsonl")
+DoublePrint(os.path.join(exp_folder, "run_logs.ans"))
+
+print(run_params)
 
 assistant_gen_client = GenerationServiceClient(base_url=f"http://localhost:5000")
 eval_client = EvaluationServiceClient(base_url=f"http://localhost:5001")
