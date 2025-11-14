@@ -10,7 +10,10 @@ from tasks import get_task
 
 def extract_answer(response):
     # extract everything between ```python and ```
-    return response.split("```python")[1].split("```")[0]
+    try:   
+        return response.split("```python")[1].split("```")[0]
+    except:
+        return response
 
 parser = argparse.ArgumentParser()
 
