@@ -119,7 +119,7 @@ def start_gen_and_eval_sessions():
         delete_session("gen")
     create_session("gen")
     # also need to go in ~/mtco_old/
-    launch_command("gen", "cd ~/reliability/ && python genserv_app.py")
+    launch_command("gen", "cd ~/reliability/ && python -m llms.genserv.app")
 
     # then evalserv: if "eval" exists, then kill it first
     if check_session_exists("eval"):

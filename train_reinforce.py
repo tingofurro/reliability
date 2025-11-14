@@ -1,6 +1,7 @@
 import argparse, json, random, torch, time, numpy as np, re, os
 from llms.genserv.client import GenerationServiceClient
 from evalserv_client import EvaluationServiceClient
+from utils_tmux import start_gen_and_eval_sessions
 from utils_experiments import make_exp_folder
 from utils import print_colored, DoublePrint
 from backprop_worker import BackpropWorker
@@ -28,7 +29,7 @@ parser.add_argument("--effective_batch_size", type=int, default=16)
 
 args = parser.parse_args()
 
-# start_gen_and_eval_sessions()
+start_gen_and_eval_sessions()
 
 exp_folder = make_exp_folder()
 print(f"Experiment folder: {exp_folder}")
@@ -44,6 +45,7 @@ with open(args_path, "w") as f:
     json.dump(run_params, f, indent=4)
 
 logs_path = os.path.join(exp_folder, "logs.jsonl")
+unique_answer_path = os.path.join(exp_folder, "unique_answers.jsonl")
 DoublePrint(os.path.join(exp_folder, "run_logs.ans"))
 
 print(run_params)
@@ -129,7 +131,11 @@ while True:
     # compute the uniqueness of the answers
     unique_answers = set([response["answer2"] for response in eval_responses])
 
+    unique_correct_answers = sorted(set([response["answer2"] for response in eval_responses if response["score"] == 1]))
+
     response_logprobs = [response["logprobs"] for response in responses]
+    correct_logprobs = [response["logprobs"] for response in eval_responses if response["score"] == 1]
+    incorrect_logprobs = [response["logprobs"] for response in eval_responses if response["score"] != 1]
     # print("RESPONSE LOGPROBS:")
     # print(response_logprobs)
 
@@ -159,9 +165,12 @@ while True:
         print(f"[Train] No backprop updates applied")
     
 
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(eval_responses), "num_train_responses": len(train_responses), "uniqueness": uniqueness}
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(eval_responses), "num_train_responses": len(train_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers)}
     with open(logs_path, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
+
+    with open(unique_answer_path, "a") as f:
+        f.write(json.dumps(unique_correct_answers) + "\n")
 
     iteration += 1
 
