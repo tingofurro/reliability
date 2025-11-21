@@ -1,22 +1,6 @@
 import multiprocessing, torch, numpy as np, setproctitle, os, time, traceback, sys
 from model_generator_hf import GenerationModel
-from utils import print_colored
-
-
-class TeeOutput:
-    def __init__(self, file1, file2):
-        self.file1 = file1
-        self.file2 = file2
-
-    def write(self, data):
-        self.file1.write(data)
-        self.file2.write(data)
-        self.file1.flush()
-        self.file2.flush()
-
-    def flush(self):
-        self.file1.flush()
-        self.file2.flush()
+from utils import TeeOutput, print_colored
 
 
 def backprop_worker_process(model_path, save_path, conversation, responses, args_dict, result_queue, error_queue):
@@ -209,4 +193,3 @@ class BackpropWorker:
             self.result_queue.close()
         if self.error_queue:
             self.error_queue.close()
-

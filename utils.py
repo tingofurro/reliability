@@ -260,5 +260,21 @@ def calculate_advantage(advantage_estimation, scores):
         raise ValueError(f"Invalid advantage estimation: {advantage_estimation}")
 
 
+class TeeOutput:
+    def __init__(self, file1, file2):
+        self.file1 = file1
+        self.file2 = file2
+
+    def write(self, data):
+        self.file1.write(data)
+        self.file2.write(data)
+        self.file1.flush()
+        self.file2.flush()
+
+    def flush(self):
+        self.file1.flush()
+        self.file2.flush()
+
+
 if __name__ == "__main__":
     print(calculate_gpu_concurrency())
