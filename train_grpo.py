@@ -22,13 +22,14 @@ parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
 parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
 parser.add_argument("--group_size", type=int, default=100)
-parser.add_argument("--num_eval_runs", type=int, default=1000)
+parser.add_argument("--num_eval_runs", type=int, default=500)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
 parser.add_argument("--effective_batch_size", type=int, default=16)
+parser.add_argument("--max_iterations", type=int, default=25)
 
 args = parser.parse_args()
 
@@ -177,7 +178,7 @@ while True:
 
     iteration += 1
 
-    if mean_eval_score >= 0.99 or iteration >= 100:
+    if mean_eval_score >= 0.99 or iteration >= args.max_iterations:
         print(f"\n[Train] Completed iteration {iteration}\n")
         break
     print(f"\n[Train] Completed iteration {iteration}\n")
