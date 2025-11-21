@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
 parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
-parser.add_argument("--degree", type=int, default=100)
+parser.add_argument("--group_size", type=int, default=100)
 parser.add_argument("--num_eval_runs", type=int, default=1000)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
@@ -66,12 +66,12 @@ sample = [d for d in data if d["task_id"] == args.task_id][0]
 
 task = get_task(sample["task"])
 
-def generate_responses(conversation, degree):
+def generate_responses(conversation, group_size):
 
     active_jobs, active_eval_jobs = [], []
-    for i in range(degree):
+    for i in range(group_size):
         job_result = assistant_gen_client.schedule_job(conversation, n_responses=1)
-        active_jobs.append({"job_id": job_result["job_id"], "degree": degree, "response_index": i, "total_responses": degree})
+        active_jobs.append({"job_id": job_result["job_id"], "group_size": group_size, "response_index": i, "total_responses": group_size})
 
     responses = []
     eval_job_id2response = {}
@@ -119,7 +119,7 @@ while True:
     # print(f"Model load result: {load_result}")
 
     # Step 1b: Generate responses
-    responses = generate_responses(conversation, args.degree + args.num_eval_runs)
+    responses = generate_responses(conversation, args.group_size + args.num_eval_runs)
 
     for response in responses:
         response["answer"] = extract_answer(response["response_text"])
@@ -128,8 +128,8 @@ while True:
 
     random.shuffle(responses)
 
-    train_responses = responses[:args.degree]
-    eval_responses = responses[args.degree:]
+    train_responses = responses[:args.group_size]
+    eval_responses = responses[args.group_size:]
 
     # compute the uniqueness of the answers
     unique_answers = set([response["answer2"] for response in eval_responses])
