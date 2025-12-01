@@ -28,7 +28,6 @@ parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 # Backprop
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
-parser.add_argument("--effective_batch_size", type=int, default=16)
 parser.add_argument("--max_iterations", type=int, default=25)
 
 args = parser.parse_args()
@@ -156,7 +155,7 @@ while True:
     # Step 2: Backprop
     MODEL_PATH = f"{model_save_path}"
     
-    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum", "effective_batch_size": args.effective_batch_size}
+    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
     
     print(f"\n[Train] Starting backprop with {len(responses)} responses")
     backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=train_responses, args_dict=backprop_args, timeout=600)
