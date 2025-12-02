@@ -12,6 +12,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     
     reduction = args_dict.get("reduction", "sum")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
+    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 8)
 
     # Load model and optimizer
     T_model_load_start = time.time()
@@ -49,11 +50,9 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             advantages = np.maximum(0, advantages)
         else:
             raise ValueError(f"Unknown advantage_estimation: {advantage_estimation}")
-        
 
         print(f"[Backprop Worker] Advantages computed using {advantage_estimation}")
-        print(f"[Backprop Worker] Advantages: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}")
-        
+        print(f"[Backprop Worker] Advantages: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}")        
 
         for response, advantage in zip(responses, advantages):
             response["advantage"] = advantage
@@ -71,30 +70,51 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             return
 
 
-        print(f"[Backprop Worker] Using {len(selected_responses)} responses for backprop")
+        num_responses = len(selected_responses)
+        print(f"[Backprop Worker] Using {num_responses} responses for backprop")
+        print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
         
-        # Get logprobs for all responses
-        all_logprobs = []
-        for response in selected_responses:
-            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
-            all_logprobs.append(logprob)
+        # Calculate chunk size for gradient accumulation
+        chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
+        num_chunks = (num_responses + chunk_size - 1) // chunk_size
+        print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
         
-        all_logprobs = torch.stack(all_logprobs)
-        
-        # Compute loss using all samples
-        loss = -torch.sum(selected_advantages * all_logprobs)
-        
-        # Single backward pass and optimizer step
+        # Zero gradients once at the start
         optimizer.zero_grad()
-        loss.backward()
+        
+        # Process responses in chunks with gradient accumulation
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, num_responses)
+            chunk_responses = selected_responses[start_idx:end_idx]
+            chunk_advantages = selected_advantages[start_idx:end_idx]
+            
+            print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
+            
+            # Get logprobs for this chunk
+            chunk_logprobs = []
+            for response in chunk_responses:
+                logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
+                chunk_logprobs.append(logprob)
+            
+            chunk_logprobs = torch.stack(chunk_logprobs)
+            
+            # Compute loss for this chunk (normalized by total number of responses)
+            chunk_loss = -torch.sum(chunk_advantages * chunk_logprobs) / num_responses
+            
+            # Backward pass - accumulates gradients
+            chunk_loss.backward()
+            
+            # Clear tensors to save memory
+            del chunk_logprobs, chunk_loss
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
+        
+        # Single optimizer step after all gradient accumulation
         torch.nn.utils.clip_grad_norm_(assistant_model.model.parameters(), max_norm=4.0)
         optimizer.step()
         any_updates = True
         print_colored("[Backprop Worker] Backprop update applied successfully", "green")
-        
-        # Clear tensors to save memory
-        del all_logprobs, loss
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
         T_backprop_end = time.time()
         timings["backprop"] = T_backprop_end - T_backprop_start
