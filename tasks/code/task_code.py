@@ -133,9 +133,9 @@ class TaskCode(Task):
         if sample.get("sample_type") == "code_synthetic":
             return f"The user requires the help in implementing the Python function {sample['name']}. Here's the instruction provided by the user:\n\n{sample['description']}"
         
-        if sample.get("source") in ["lcb_easy", "lcb_medium"]:
+        if sample.get("source") in ["lcb_easy", "lcb_medium", "livecodebench"]:
             return self._populate_fully_specific_prompt_lcb(sample)
-        elif sample.get("source") == "humaneval":
+        elif sample.get("source") in ["humaneval", "openai_humaneval"]:
             return self._populate_fully_specific_prompt_humaneval(sample)
         else:
             raise ValueError(f"Invalid source: {sample.get('source')}")
@@ -158,9 +158,9 @@ class TaskCode(Task):
             concat_shards = "\n".join([f"- {shard['shard']}" for shard in sample["shards"]])
             return f"The user requires the help in implementing the Python function {sample['name']}. Here's the instruction provided by the user:\n\n{concat_shards}"
         
-        if sample.get("source") in ["lcb_easy", "lcb_medium"]:
+        if sample.get("source") in ["lcb_easy", "lcb_medium", "livecodebench"]:
             return self._populate_concat_prompt_lcb(sample)
-        elif sample.get("source") == "humaneval":
+        elif sample.get("source") in ["humaneval", "openai_humaneval"]:
             return self._populate_concat_prompt_humaneval(sample)
         else:
             raise ValueError(f"Invalid source: {sample.get('source')}")
@@ -185,12 +185,12 @@ class TaskCode(Task):
 
     def process_original_sample(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """Process python sample for annotation UI display"""
-        if sample.get("source") in ["lcb_easy", "lcb_medium"]:
+        if sample.get("source") in ["lcb_easy", "lcb_medium", "livecodebench"]:
             return {
                 "task_id": sample["task_id"],
                 "prompt": sample["question_content"] + "\n\n" + sample["starter_code"],
             }
-        elif sample.get("source") == "humaneval":
+        elif sample.get("source") in ["humaneval", "openai_humaneval"]:
             return {
                 "task_id": sample["task_id"],
                 "prompt": sample["prompt"],

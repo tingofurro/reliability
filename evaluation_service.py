@@ -104,7 +104,10 @@ def evaluation_worker_process(worker_id: int, job_queue, shared_jobs, shared_wor
                         # print(f"[Eval Worker {worker_id}] ✓ Completed evaluation job {job_id}")
                 
                 except Exception as e:
-                    # print(f"[Eval Worker {worker_id}] ✗ Error processing evaluation job {job_id}: {e}")
+                    import traceback
+                    error_details = traceback.format_exc()
+                    print(f"[Eval Worker {worker_id}] ✗ Error processing evaluation job {job_id}: {e}")
+                    print(f"[Eval Worker {worker_id}] Traceback:\n{error_details}")
                     if job_id in shared_jobs:
                         job_info = shared_jobs[job_id]
                         job_info["status"] = "error"

@@ -19,9 +19,6 @@ class SystemAgent:
             # in these tasks, the assistant is explicitly instructed to provide an answer attempt at each turn
             return {"response_type": "answer_attempt"}, 0.0
 
-        initial_query = self.sample["shards"][0]["shard"]
-        shards = self.sample["shards"][1:]
-
         last_turn_text = extract_conversation(conversation_so_far, to_str=True, only_last_turn=True)
 
         # print("--------------------- TURN CLASSIFICATION ---------------------")
