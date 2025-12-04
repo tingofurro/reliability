@@ -1,7 +1,8 @@
-import argparse, json, random, torch, time, numpy as np, re, os
+import argparse, json, random, torch, time, numpy as np, re, os, tqdm
 from llms.genserv.client import GenerationServiceClient
 from evalserv_client import EvaluationServiceClient
 from utils_tmux import start_gen_and_eval_sessions
+from concurrent.futures import ThreadPoolExecutor
 from utils_experiments import make_exp_folder
 from utils import print_colored, DoublePrint
 from backprop_worker import BackpropWorker
@@ -21,7 +22,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
 parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
+parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree"])
 parser.add_argument("--group_size", type=int, default=100)
+parser.add_argument("--tree_degree", type=int, default=2)
+parser.add_argument("--tree_depth", type=int, default=7)
+
 parser.add_argument("--num_eval_runs", type=int, default=500)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
@@ -34,7 +39,7 @@ args = parser.parse_args()
 
 suffix = f"sample_{args.task_id.replace('/', '_')}_gs{args.group_size}"
 
-start_gen_and_eval_sessions()
+# start_gen_and_eval_sessions()
 
 exp_folder = make_exp_folder(suffix=suffix)
 print(f"Experiment folder: {exp_folder}")
@@ -106,6 +111,42 @@ def generate_responses(conversation, group_size):
         time.sleep(0.1)
     return responses
 
+def run_evaluation_phase(conversation, num_eval_runs):
+    responses = generate_responses(conversation, num_eval_runs)
+    return responses
+
+def run_training_phase(conversation, sample_strategy, group_size, tree_depth, tree_degree):
+    if sample_strategy == "iid":
+        responses = generate_responses(conversation, group_size)
+    elif sample_strategy == "tree":
+        tree_job = assistant_gen_client.build_tree(conversation, depth=tree_depth, degree=tree_degree)
+        tree_response = assistant_gen_client.wait_for_tree_completion(tree_job["job_id"])
+        responses = tree_response["tree"]
+
+        eval_jobs = []
+        for response in responses:
+            eval_job = eval_client.schedule_evaluation(
+                conversation=conversation + [{"role": "assistant", "content": response["response_text"]}], 
+                task_name=sample["task"], 
+                sample=sample
+            )
+            eval_jobs.append({"job_id": eval_job["job_id"], "response": response})
+        
+        # Wait for all evaluation jobs to complete
+        pending_eval_jobs = eval_jobs.copy()
+        while pending_eval_jobs:
+            for eval_job_info in pending_eval_jobs[:]:
+                eval_response = eval_client.check_job(eval_job_info["job_id"])
+                if eval_response["status"] == "completed":
+                    eval_job_info["response"]["score"] = eval_response["result"]["evaluation_return"]["score"]
+                    pending_eval_jobs.remove(eval_job_info)
+                elif eval_response["status"] == "error":
+                    eval_job_info["response"]["score"] = 0
+                    pending_eval_jobs.remove(eval_job_info)
+            if pending_eval_jobs:
+                time.sleep(0.1)
+    return responses
+
 system_message = task.generate_system_prompt(sample)
 input_prompt = task.populate_fully_specific_prompt(sample)
 
@@ -121,34 +162,37 @@ while True:
     # print(f"Model load result: {load_result}")
 
     # Step 1b: Generate responses
-    responses = generate_responses(conversation, args.group_size + args.num_eval_runs)
+    # responses = generate_responses(conversation, args.group_size + args.num_eval_runs)
+    print(">> Starting evaluation and training phases in parallel")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        training_future = executor.submit(run_training_phase, conversation, args.sample_strategy, args.group_size, args.tree_depth, args.tree_degree)
+        evaluation_future = executor.submit(run_evaluation_phase, conversation, args.num_eval_runs)
+        training_responses = training_future.result()
+        evaluation_responses = evaluation_future.result()
 
-    for response in responses:
+    # responses = evaluation_responses + training_responses
+
+    for response in training_responses + evaluation_responses:
         response["answer"] = extract_answer(response["response_text"])
         response["answer2"] = re.sub(r'(\"\"\".*?\"\"\"|\'\'\'.*?\'\'\'|#.*?$)', '', response["answer"], flags=re.DOTALL | re.MULTILINE)
         response["answer2"] = "\n".join([line for line in response["answer2"].split("\n") if line.strip()]) # remove any empty lines
 
-    random.shuffle(responses)
-
-    train_responses = responses[:args.group_size]
-    eval_responses = responses[args.group_size:]
-
     # compute the uniqueness of the answers
-    unique_answers = set([response["answer2"] for response in eval_responses])
+    unique_answers = set([response["answer2"] for response in evaluation_responses])
 
-    unique_correct_answers = sorted(set([response["answer2"] for response in eval_responses if response["score"] == 1]))
+    unique_correct_answers = sorted(set([response["answer2"] for response in evaluation_responses if response["score"] == 1]))
 
-    response_logprobs = [response["logprobs"] for response in responses]
-    correct_logprobs = [response["logprobs"] for response in eval_responses if response["score"] == 1]
-    incorrect_logprobs = [response["logprobs"] for response in eval_responses if response["score"] != 1]
+    response_logprobs = [response["logprobs"] for response in evaluation_responses]
+    correct_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] == 1]
+    incorrect_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] != 1]
     # print("RESPONSE LOGPROBS:")
     # print(response_logprobs)
 
-    mean_train_score = np.mean([response["score"] for response in train_responses])
-    mean_eval_score = np.mean([response["score"] for response in eval_responses])
-    uniqueness = 100.0 * len(unique_answers) / len(eval_responses)
+    mean_train_score = np.mean([response["score"] for response in training_responses])
+    mean_eval_score = np.mean([response["score"] for response in evaluation_responses])
+    uniqueness = 100.0 * len(unique_answers) / len(evaluation_responses)
     print_colored(f"Mean train score: {mean_train_score}", "green")
-    print_colored(f"Mean eval score: {mean_eval_score} (Uniqueness: {len(unique_answers) / len(eval_responses)} ({uniqueness:.2f}))", "green")
+    print_colored(f"Mean eval score: {mean_eval_score} (Uniqueness: {len(unique_answers) / len(evaluation_responses)} ({uniqueness:.2f}))", "green")
 
     # Step 1c: Unload the model
     unload_result = assistant_gen_client.unload_model()
@@ -159,8 +203,8 @@ while True:
     
     backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
     
-    print(f"\n[Train] Starting backprop with {len(responses)} responses")
-    backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=train_responses, args_dict=backprop_args, timeout=600)
+    print(f"\n[Train] Starting backprop with {len(training_responses)} responses")
+    backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=training_responses, args_dict=backprop_args, timeout=600)
     
     if backprop_results and backprop_results["any_updates"]:
         print(f"[Train] Backprop successful! Model saved to {MODEL_PATH}")
@@ -170,7 +214,7 @@ while True:
         print(f"[Train] No backprop updates applied")
     
 
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(eval_responses), "num_train_responses": len(train_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers)}
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers)}
     with open(logs_path, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
 
