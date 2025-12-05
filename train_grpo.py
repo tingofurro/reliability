@@ -39,7 +39,7 @@ args = parser.parse_args()
 
 suffix = f"sample_{args.task_id.replace('/', '_')}_gs{args.group_size}"
 
-# start_gen_and_eval_sessions()
+start_gen_and_eval_sessions()
 
 exp_folder = make_exp_folder(suffix=suffix)
 print(f"Experiment folder: {exp_folder}")
