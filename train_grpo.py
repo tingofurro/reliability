@@ -31,6 +31,7 @@ parser.add_argument("--num_eval_runs", type=int, default=500)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
+parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto"])
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
 parser.add_argument("--max_iterations", type=int, default=25)
@@ -74,7 +75,6 @@ sample = [d for d in data if d["task_id"] == args.task_id][0]
 task = get_task(sample["task"])
 
 def generate_responses(conversation, group_size):
-
     active_jobs, active_eval_jobs = [], []
     for i in range(group_size):
         job_result = assistant_gen_client.schedule_job(conversation, n_responses=1)
@@ -115,36 +115,40 @@ def run_evaluation_phase(conversation, num_eval_runs):
     responses = generate_responses(conversation, num_eval_runs)
     return responses
 
+def generate_tree_responses(conversation, tree_depth, tree_degree):
+    tree_job = assistant_gen_client.build_tree(conversation, depth=tree_depth, degree=tree_degree)
+    tree_response = assistant_gen_client.wait_for_tree_completion(tree_job["job_id"])
+    responses = tree_response["tree"]
+
+    eval_jobs = []
+    for response in responses:
+        eval_job = eval_client.schedule_evaluation(
+            conversation=conversation + [{"role": "assistant", "content": response["response_text"]}], 
+            task_name=sample["task"], 
+            sample=sample
+        )
+        eval_jobs.append({"job_id": eval_job["job_id"], "response": response})
+    
+    # Wait for all evaluation jobs to complete
+    pending_eval_jobs = eval_jobs.copy()
+    while pending_eval_jobs:
+        for eval_job_info in pending_eval_jobs[:]:
+            eval_response = eval_client.check_job(eval_job_info["job_id"])
+            if eval_response["status"] == "completed":
+                eval_job_info["response"]["score"] = eval_response["result"]["evaluation_return"]["score"]
+                pending_eval_jobs.remove(eval_job_info)
+            elif eval_response["status"] == "error":
+                eval_job_info["response"]["score"] = 0
+                pending_eval_jobs.remove(eval_job_info)
+        if pending_eval_jobs:
+            time.sleep(0.1)
+    return responses
+
 def run_training_phase(conversation, sample_strategy, group_size, tree_depth, tree_degree):
     if sample_strategy == "iid":
         responses = generate_responses(conversation, group_size)
     elif sample_strategy == "tree":
-        tree_job = assistant_gen_client.build_tree(conversation, depth=tree_depth, degree=tree_degree)
-        tree_response = assistant_gen_client.wait_for_tree_completion(tree_job["job_id"])
-        responses = tree_response["tree"]
-
-        eval_jobs = []
-        for response in responses:
-            eval_job = eval_client.schedule_evaluation(
-                conversation=conversation + [{"role": "assistant", "content": response["response_text"]}], 
-                task_name=sample["task"], 
-                sample=sample
-            )
-            eval_jobs.append({"job_id": eval_job["job_id"], "response": response})
-        
-        # Wait for all evaluation jobs to complete
-        pending_eval_jobs = eval_jobs.copy()
-        while pending_eval_jobs:
-            for eval_job_info in pending_eval_jobs[:]:
-                eval_response = eval_client.check_job(eval_job_info["job_id"])
-                if eval_response["status"] == "completed":
-                    eval_job_info["response"]["score"] = eval_response["result"]["evaluation_return"]["score"]
-                    pending_eval_jobs.remove(eval_job_info)
-                elif eval_response["status"] == "error":
-                    eval_job_info["response"]["score"] = 0
-                    pending_eval_jobs.remove(eval_job_info)
-            if pending_eval_jobs:
-                time.sleep(0.1)
+        responses = generate_tree_responses(conversation, tree_depth, tree_degree)
     return responses
 
 system_message = task.generate_system_prompt(sample)
@@ -201,7 +205,7 @@ while True:
     # Step 2: Backprop
     MODEL_PATH = f"{model_save_path}"
     
-    backprop_args = {"learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
+    backprop_args = {"backprop_method": args.backprop_method, "learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
     
     print(f"\n[Train] Starting backprop with {len(training_responses)} responses")
     backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=training_responses, args_dict=backprop_args, timeout=600)

@@ -1,7 +1,105 @@
+from llms.genserv.utils_prefix_tree import build_prefix_tree, calculate_backtrack_scores, get_backprop_ops, visualize_prefix_tree
 import multiprocessing, torch, numpy as np, setproctitle, os, time, traceback, sys
 from model_generator_hf import GenerationModel
 from utils import TeeOutput, print_colored
 
+def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict):
+    reduction = args_dict.get("reduction", "sum")
+    advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
+    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 24)
+
+    # Extract scores and compute advantages
+    scores = np.array([response["score"] for response in responses])
+    print(f"[Backprop Worker] Scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
+
+    if advantage_estimation == "zero_mean":
+        advantages = scores - scores.mean()
+    elif advantage_estimation == "zero_mean_noneg":
+        advantages = scores - scores.mean()
+        advantages = np.maximum(0, advantages)
+    else:
+        raise ValueError(f"Unknown advantage_estimation: {advantage_estimation}")
+
+    print(f"[Backprop Worker] Advantages computed using {advantage_estimation}")
+    print(f"[Backprop Worker] Advantages: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}")        
+
+    for response, advantage in zip(responses, advantages):
+        response["advantage"] = advantage
+
+    # Filter out responses with zero advantage if using zero_mean_noneg
+    selected_responses = [response for response in responses if response["logprobs"] > -1000]
+    if advantage_estimation == "zero_mean_noneg":
+        selected_responses = [response for response in selected_responses if response["advantage"] > 0]
+
+    selected_advantages = torch.tensor([response["advantage"] for response in selected_responses]).to(assistant_model.device)
+
+    if len(selected_responses) == 0:
+        print_colored("[Backprop Worker] No responses with positive advantage, skipping backprop", "yellow")
+        return None
+
+    num_responses = len(selected_responses)
+    print(f"[Backprop Worker] Using {num_responses} responses for backprop")
+    print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
+    
+    # Calculate chunk size for gradient accumulation
+    chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
+    num_chunks = (num_responses + chunk_size - 1) // chunk_size
+    print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
+
+    # Process responses in chunks with gradient accumulation
+    for chunk_idx in range(num_chunks):
+        start_idx = chunk_idx * chunk_size
+        end_idx = min(start_idx + chunk_size, num_responses)
+        chunk_responses = selected_responses[start_idx:end_idx]
+        chunk_advantages = selected_advantages[start_idx:end_idx]
+        
+        print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
+        
+        # Get logprobs for this chunk
+        chunk_logprobs = []
+        for response in chunk_responses:
+            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
+            chunk_logprobs.append(logprob)
+        
+        chunk_logprobs = torch.stack(chunk_logprobs)
+        
+        # Compute loss for this chunk (normalized by total number of responses)
+        chunk_loss = -torch.sum(chunk_advantages * chunk_logprobs) / num_responses
+        
+        # Backward pass - accumulates gradients
+        chunk_loss.backward()
+        
+        # Clear tensors to save memory
+        del chunk_logprobs, chunk_loss
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
+    return {"success": True}
+
+
+def calculate_gradients_kto(assistant_model, conversation, responses, args_dict):
+    prefix_tree = build_prefix_tree(responses)
+    calculate_backtrack_scores(prefix_tree)
+    backprop_ops = get_backprop_ops(prefix_tree)
+
+    print(f"[Backprop Worker] Found {len(backprop_ops)} backprop operations")
+
+    for op_idx, backprop_op in enumerate(backprop_ops):
+        prefix = backprop_op["prefix"]
+        options = backprop_op["options"]
+        branch_token_ids = [option["branch_tokens"][0] for option in options]
+
+        branch_logprobs = assistant_model.get_branch_logprobs(conversation, prefix, branch_token_ids)
+        advantages = [option["advantage"] for option in options]
+        advantages = torch.tensor(advantages).to(assistant_model.device)
+
+        chunk_loss = -torch.sum(advantages * branch_logprobs)
+        chunk_loss.backward()
+
+        del branch_logprobs, chunk_loss
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        print(f"[Backprop Worker] Backprop operation {op_idx + 1}/{len(backprop_ops)} completed")
+
+    return {"success": True}
 
 def backprop_worker_process(model_path, save_path, conversation, responses, args_dict, result_queue, error_queue):
     setproctitle.setproctitle("backprop_worker")
@@ -10,6 +108,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     
     timings = {"model_load": 0, "backprop": 0, "model_save": 0}
     
+    backprop_method = args_dict.get("backprop_method", "grpo")
     reduction = args_dict.get("reduction", "sum")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
     gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 8)
@@ -39,77 +138,20 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     try:
         T_backprop_start = time.time()
         
-        # Extract scores and compute advantages
-        scores = np.array([response["score"] for response in responses])
-        print(f"[Backprop Worker] Scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
-        
-        if advantage_estimation == "zero_mean":
-            advantages = scores - scores.mean()
-        elif advantage_estimation == "zero_mean_noneg":
-            advantages = scores - scores.mean()
-            advantages = np.maximum(0, advantages)
-        else:
-            raise ValueError(f"Unknown advantage_estimation: {advantage_estimation}")
-
-        print(f"[Backprop Worker] Advantages computed using {advantage_estimation}")
-        print(f"[Backprop Worker] Advantages: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}")        
-
-        for response, advantage in zip(responses, advantages):
-            response["advantage"] = advantage
-
-        # Filter out responses with zero advantage if using zero_mean_noneg
-        selected_responses = [response for response in responses if response["logprobs"] > -1000]
-        if advantage_estimation == "zero_mean_noneg":
-            selected_responses = [response for response in selected_responses if response["advantage"] > 0]
-
-        selected_advantages = torch.tensor([response["advantage"] for response in selected_responses]).to(assistant_model.device)
-
-        if len(selected_responses) == 0:
-            print_colored("[Backprop Worker] No responses with positive advantage, skipping backprop", "yellow")
-            result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses)})
-            return
-
-
-        num_responses = len(selected_responses)
-        print(f"[Backprop Worker] Using {num_responses} responses for backprop")
-        print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
-        
-        # Calculate chunk size for gradient accumulation
-        chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
-        num_chunks = (num_responses + chunk_size - 1) // chunk_size
-        print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
-        
         # Zero gradients once at the start
         optimizer.zero_grad()
+
+        if backprop_method == "grpo":
+            grad_return = calculate_gradients_grpo(assistant_model, conversation, responses, args_dict)
+        elif backprop_method == "kto":
+            grad_return = calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
+        else:
+            raise ValueError(f"Unknown backprop method: {backprop_method}")
         
-        # Process responses in chunks with gradient accumulation
-        for chunk_idx in range(num_chunks):
-            start_idx = chunk_idx * chunk_size
-            end_idx = min(start_idx + chunk_size, num_responses)
-            chunk_responses = selected_responses[start_idx:end_idx]
-            chunk_advantages = selected_advantages[start_idx:end_idx]
-            
-            print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
-            
-            # Get logprobs for this chunk
-            chunk_logprobs = []
-            for response in chunk_responses:
-                logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
-                chunk_logprobs.append(logprob)
-            
-            chunk_logprobs = torch.stack(chunk_logprobs)
-            
-            # Compute loss for this chunk (normalized by total number of responses)
-            chunk_loss = -torch.sum(chunk_advantages * chunk_logprobs) / num_responses
-            
-            # Backward pass - accumulates gradients
-            chunk_loss.backward()
-            
-            # Clear tensors to save memory
-            del chunk_logprobs, chunk_loss
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
-        
+        if grad_return is None:
+            result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses)})
+            return None
+
         # Single optimizer step after all gradient accumulation
         torch.nn.utils.clip_grad_norm_(assistant_model.model.parameters(), max_norm=4.0)
         optimizer.step()

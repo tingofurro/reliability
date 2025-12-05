@@ -153,6 +153,31 @@ class GenerationModel:
         response_logprobs = torch.stack(response_logprobs)
         return response_logprobs
 
+    def get_branch_logprobs(self, conversation, prefix_tokens, branch_token_ids, use_grad=True):
+        # they should... both be lists of integers
+        assert len(prefix_tokens) > 0 and isinstance(prefix_tokens, list) and all(isinstance(token, int) for token in prefix_tokens)
+        assert len(branch_token_ids) > 0 and isinstance(branch_token_ids, list) and all(isinstance(token, int) for token in branch_token_ids)
+
+        # Calculate logprobs for branch tokens given a prefix
+        inputs = self.construct_inputs(conversation)
+        input_ids = inputs["input_ids"]
+
+        
+        with torch.no_grad():
+            input_outputs = self.model(input_ids, return_dict=True)
+
+        prefix_tokens_tensor = torch.tensor([prefix_tokens]).to(self.device)
+
+        with torch.set_grad_enabled(use_grad):
+            prefix_outputs = self.model(prefix_tokens_tensor, past_key_values=input_outputs.past_key_values, return_dict=True)
+
+        logits = prefix_outputs.logits
+        token_logprobs = torch.log_softmax(logits, dim=-1)
+
+        # Calculate logprobs for each branch option
+        branch_logprobs = token_logprobs[0, -1, branch_token_ids]
+        return branch_logprobs
+
     def save_model(self, path):
         self.model.save_pretrained(path)
         self.tokenizer.save_pretrained(path)
