@@ -21,9 +21,13 @@ def load_experiment_data():
             exp_args = json.load(f)
         
         learning_rate = exp_args["learning_rate"]
-        if "group_size" not in exp_args:
-            continue
-        group_size = exp_args["group_size"]
+
+        experiment_type = ""
+        sample_strategy = exp_args.get("sample_strategy", "iid")
+        if sample_strategy == "tree":
+            experiment_type = f"tree-{exp_args['tree_depth']}-{exp_args['tree_degree']}"
+        else:
+            experiment_type = f"iid-{exp_args['group_size']}"
         
         exp_logs = []
         with open(f"experiments/{exp}/logs.jsonl", "r") as f:
@@ -57,7 +61,7 @@ def load_experiment_data():
             "mean_eval_score": mean_eval_score,
             "uniqueness": uniqueness,
             "learning_rate": learning_rate,
-            "group_size": group_size,
+            "experiment_type": experiment_type,
             "correct_logprobs": correct_logprobs,
             "incorrect_logprobs": incorrect_logprobs,
             "num_unique_correct_answers": num_unique_correct_answers,
@@ -75,9 +79,9 @@ except Exception as e:
     st.error(f"Error loading data: {e}")
     st.stop()
 
-# Get unique task_ids and group_sizes
+# Get unique task_ids and experiment_types
 task_ids = sorted(list(set([res["task_id"] for res in exp_results])))
-group_sizes = sorted(list(set([res["group_size"] for res in exp_results])))
+experiment_types = sorted(list(set([res["experiment_type"] for res in exp_results])))
 
 # Sidebar controls
 st.sidebar.header("Filters")
@@ -94,14 +98,14 @@ def process_data_for_plots(task_id, success_only, max_iterations):
     all_mean_eval_scores, all_uniquenesses = {}, {}
     run_counts = {}
     
-    for group_size in group_sizes:
-        all_mean_eval_scores[group_size], all_uniquenesses[group_size] = [], []
-        this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["group_size"] == group_size]
+    for experiment_type in experiment_types:
+        all_mean_eval_scores[experiment_type], all_uniquenesses[experiment_type] = [], []
+        this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["experiment_type"] == experiment_type]
         
         if success_only:
             this_results = [res for res in this_results if res["is_success"]]
         
-        run_counts[group_size] = len(this_results)
+        run_counts[experiment_type] = len(this_results)
         
         for res in this_results:
             mean_eval_score = res["mean_eval_score"][:max_iterations]
@@ -112,8 +116,8 @@ def process_data_for_plots(task_id, success_only, max_iterations):
             if len(uniqueness) < max_iterations:
                 uniqueness += [uniqueness[-1]] * (max_iterations - len(uniqueness))
             
-            all_mean_eval_scores[group_size].append(mean_eval_score)
-            all_uniquenesses[group_size].append(uniqueness)
+            all_mean_eval_scores[experiment_type].append(mean_eval_score)
+            all_uniquenesses[experiment_type].append(uniqueness)
     
     return all_mean_eval_scores, all_uniquenesses, run_counts
 
@@ -124,41 +128,41 @@ success_data = process_data_for_plots(selected_task_id, True, max_iter)
 # Create 2x2 subplot
 fig = make_subplots(rows=2, cols=2, subplot_titles=("Mean Eval Scores - All", "Uniqueness - All", "Mean Eval Scores - Success", "Uniqueness - Success"), vertical_spacing=0.12, horizontal_spacing=0.1)
 
-# Colors for group sizes
+# Colors for experiment types
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
 # Plot "All runs" - Mean Eval Scores (row 1, col 1)
-for idx, group_size in enumerate(group_sizes):
-    if len(all_data[0][group_size]) > 0:
-        mean_scores = np.mean(all_data[0][group_size], axis=0)
-        std_scores = np.std(all_data[0][group_size], axis=0)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(all_data[0][experiment_type]) > 0:
+        mean_scores = np.mean(all_data[0][experiment_type], axis=0)
+        std_scores = np.std(all_data[0][experiment_type], axis=0)
         iterations = list(range(len(mean_scores)))
         
-        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"Group Size {group_size}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"gs{group_size}", showlegend=True, hovertemplate=f'Group Size {group_size}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[2][group_size]}<extra></extra>'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=True, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[2][experiment_type]}<extra></extra>'), row=1, col=1)
 
 # Plot "All runs" - Uniqueness (row 1, col 2)
-for idx, group_size in enumerate(group_sizes):
-    if len(all_data[1][group_size]) > 0:
-        mean_uniqueness = np.mean(all_data[1][group_size], axis=0)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(all_data[1][experiment_type]) > 0:
+        mean_uniqueness = np.mean(all_data[1][experiment_type], axis=0)
         iterations = list(range(len(mean_uniqueness)))
         
-        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"Group Size {group_size}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"gs{group_size}", showlegend=False, hovertemplate=f'Group Size {group_size}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[2][group_size]}<extra></extra>'), row=1, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[2][experiment_type]}<extra></extra>'), row=1, col=2)
 
 # Plot "Success only" - Mean Eval Scores (row 2, col 1)
-for idx, group_size in enumerate(group_sizes):
-    if len(success_data[0][group_size]) > 0:
-        mean_scores = np.mean(success_data[0][group_size], axis=0)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(success_data[0][experiment_type]) > 0:
+        mean_scores = np.mean(success_data[0][experiment_type], axis=0)
         iterations = list(range(len(mean_scores)))
         
-        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"Group Size {group_size}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"gs{group_size}", showlegend=False, hovertemplate=f'Group Size {group_size}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {success_data[2][group_size]}<extra></extra>'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {success_data[2][experiment_type]}<extra></extra>'), row=2, col=1)
 
 # Plot "Success only" - Uniqueness (row 2, col 2)
-for idx, group_size in enumerate(group_sizes):
-    if len(success_data[1][group_size]) > 0:
-        mean_uniqueness = np.mean(success_data[1][group_size], axis=0)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(success_data[1][experiment_type]) > 0:
+        mean_uniqueness = np.mean(success_data[1][experiment_type], axis=0)
         iterations = list(range(len(mean_uniqueness)))
         
-        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"Group Size {group_size}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"gs{group_size}", showlegend=False, hovertemplate=f'Group Size {group_size}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {success_data[2][group_size]}<extra></extra>'), row=2, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {success_data[2][experiment_type]}<extra></extra>'), row=2, col=2)
 
 # Update axes labels
 fig.update_xaxes(title_text="Iteration", row=1, col=1)
@@ -182,15 +186,15 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("**All Runs:**")
-    for group_size in group_sizes:
-        count = all_data[2][group_size]
-        st.markdown(f"- Group Size {group_size}: **{count}** runs")
+    for experiment_type in experiment_types:
+        count = all_data[2][experiment_type]
+        st.markdown(f"- {experiment_type}: **{count}** runs")
 
 with col2:
     st.markdown("**Success Only:**")
-    for group_size in group_sizes:
-        count = success_data[2][group_size]
-        st.markdown(f"- Group Size {group_size}: **{count}** runs")
+    for experiment_type in experiment_types:
+        count = success_data[2][experiment_type]
+        st.markdown(f"- {experiment_type}: **{count}** runs")
 
 # Summary statistics
 st.subheader("Summary Statistics")
