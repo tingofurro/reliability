@@ -8,6 +8,18 @@ from collections import defaultdict
 
 st.set_page_config(page_title="Training Analysis", layout="wide")
 
+SAVED_FILTERS_FILE = "saved_filters.json"
+
+def load_saved_filters():
+    if os.path.exists(SAVED_FILTERS_FILE):
+        with open(SAVED_FILTERS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_filters_to_file(filters_dict):
+    with open(SAVED_FILTERS_FILE, "w") as f:
+        json.dump(filters_dict, f, indent=2)
+
 def load_experiment_data():
     experiments = sorted([exp for exp in os.listdir("experiments")])
     necessary_files = ["args.json", "logs.jsonl", "unique_answers.jsonl"]
@@ -24,10 +36,15 @@ def load_experiment_data():
 
         experiment_type = ""
         sample_strategy = exp_args.get("sample_strategy", "iid")
+        backprop_method = exp_args.get("backprop_method", "grpo")
+        tree_degree = exp_args.get("tree_degree", None)
+        tree_depth = exp_args.get("tree_depth", None)
+        group_size = exp_args.get("group_size", None)
+        
         if sample_strategy == "tree":
-            experiment_type = f"tree-{exp_args['tree_depth']}-{exp_args['tree_degree']}"
+            experiment_type = f"tree-{tree_degree}^{tree_depth}_{backprop_method}"
         else:
-            experiment_type = f"iid-{exp_args['group_size']}"
+            experiment_type = f"iid-{group_size}_{backprop_method}"
         
         exp_logs = []
         with open(f"experiments/{exp}/logs.jsonl", "r") as f:
@@ -66,7 +83,11 @@ def load_experiment_data():
             "incorrect_logprobs": incorrect_logprobs,
             "num_unique_correct_answers": num_unique_correct_answers,
             "num_new_answers": num_new_answers,
-            "is_success": is_success
+            "is_success": is_success,
+            "sample_strategy": sample_strategy,
+            "tree_degree": tree_degree,
+            "tree_depth": tree_depth,
+            "group_size": group_size
         })
     
     return exp_results
@@ -83,24 +104,105 @@ except Exception as e:
 task_ids = sorted(list(set([res["task_id"] for res in exp_results])))
 experiment_types = sorted(list(set([res["experiment_type"] for res in exp_results])))
 
+# Get unique tree parameters
+tree_degrees = sorted(list(set([res["tree_degree"] for res in exp_results if res["tree_degree"] is not None])))
+tree_depths = sorted(list(set([res["tree_depth"] for res in exp_results if res["tree_depth"] is not None])))
+group_sizes = sorted(list(set([res["group_size"] for res in exp_results if res["group_size"] is not None])))
+
+# Initialize session state for saved filters
+if "saved_filters" not in st.session_state:
+    st.session_state.saved_filters = load_saved_filters()
+if "filter_to_load" not in st.session_state:
+    st.session_state.filter_to_load = None
+
 # Sidebar controls
 st.sidebar.header("Filters")
 selected_task_id = st.sidebar.selectbox("Task ID", ["all"] + task_ids, index=0)
 show_only_success = st.sidebar.checkbox("Show only successful runs", value=False)
 max_iter = st.sidebar.slider("Max Iterations", min_value=5, max_value=50, value=25)
 
+st.sidebar.subheader("Run Filter (JSON)")
+
+# Saved filters management
+saved_filter_names = list(st.session_state.saved_filters.keys())
+if saved_filter_names:
+    st.sidebar.markdown("**Load Saved Filter:**")
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        selected_saved_filter = st.selectbox("Saved Filters", [""] + saved_filter_names, label_visibility="collapsed")
+    with col2:
+        if st.button("Load"):
+            if selected_saved_filter:
+                st.session_state.filter_to_load = st.session_state.saved_filters[selected_saved_filter]
+                st.rerun()
+    
+    if selected_saved_filter:
+        if st.sidebar.button(f"Delete '{selected_saved_filter}'"):
+            del st.session_state.saved_filters[selected_saved_filter]
+            save_filters_to_file(st.session_state.saved_filters)
+            st.rerun()
+
+# Determine default value for text area
+default_filter_text = "{}"
+if st.session_state.filter_to_load is not None:
+    default_filter_text = json.dumps(st.session_state.filter_to_load, indent=2)
+    st.session_state.filter_to_load = None
+
+run_filter_text = st.sidebar.text_area("Filter by args (e.g., {\"tree_degree\": 2, \"tree_depth\": 13})", value=default_filter_text, height=100, key="run_filter_input")
+
+# Parse run filter
+try:
+    run_filter = json.loads(run_filter_text)
+    if not isinstance(run_filter, dict):
+        st.sidebar.error("Filter must be a JSON object")
+        run_filter = {}
+except json.JSONDecodeError as e:
+    st.sidebar.error(f"Invalid JSON: {e}")
+    run_filter = {}
+
+# Save current filter
+if run_filter:
+    st.sidebar.markdown("**Save Current Filter:**")
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        new_filter_name = st.text_input("Filter name", label_visibility="collapsed", placeholder="Enter filter name")
+    with col2:
+        if st.button("Save"):
+            if new_filter_name:
+                st.session_state.saved_filters[new_filter_name] = run_filter
+                save_filters_to_file(st.session_state.saved_filters)
+                st.sidebar.success(f"Saved '{new_filter_name}'")
+                st.rerun()
+            else:
+                st.sidebar.error("Enter a name")
+
+# Function to check if experiment matches filter
+def matches_filter(exp_result, filter_dict):
+    if not filter_dict:
+        return True
+    for key, value in filter_dict.items():
+        if exp_result.get(key) != value:
+            return False
+    return True
+
 # Title
 st.title("Training Analysis Dashboard")
-st.markdown(f"**Task:** {selected_task_id} | **Filter:** {'Success only' if show_only_success else 'All runs'}")
+filter_info = f"**Task:** {selected_task_id} | **Filter:** {'Success only' if show_only_success else 'All runs'}"
+if run_filter:
+    filter_info += f" | **Run Filter:** {json.dumps(run_filter)}"
+st.markdown(filter_info)
 
 # Process data for plots
-def process_data_for_plots(task_id, success_only, max_iterations):
+def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dict):
     all_mean_eval_scores, all_uniquenesses = {}, {}
     run_counts = {}
     
     for experiment_type in experiment_types:
         all_mean_eval_scores[experiment_type], all_uniquenesses[experiment_type] = [], []
         this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["experiment_type"] == experiment_type]
+        
+        # Apply run filter
+        this_results = [res for res in this_results if matches_filter(res, run_filter_dict)]
         
         if success_only:
             this_results = [res for res in this_results if res["is_success"]]
@@ -122,8 +224,8 @@ def process_data_for_plots(task_id, success_only, max_iterations):
     return all_mean_eval_scores, all_uniquenesses, run_counts
 
 # Process data for "All runs" and "Success only"
-all_data = process_data_for_plots(selected_task_id, False, max_iter)
-success_data = process_data_for_plots(selected_task_id, True, max_iter)
+all_data = process_data_for_plots(selected_task_id, False, max_iter, run_filter)
+success_data = process_data_for_plots(selected_task_id, True, max_iter, run_filter)
 
 # Create 2x2 subplot
 fig = make_subplots(rows=2, cols=2, subplot_titles=("Mean Eval Scores - All", "Uniqueness - All", "Mean Eval Scores - Success", "Uniqueness - Success"), vertical_spacing=0.12, horizontal_spacing=0.1)
@@ -198,8 +300,13 @@ with col2:
 
 # Summary statistics
 st.subheader("Summary Statistics")
-total_runs = len([res for res in exp_results if (res["task_id"] == selected_task_id or selected_task_id == "all")])
-success_runs = len([res for res in exp_results if (res["task_id"] == selected_task_id or selected_task_id == "all") and res["is_success"]])
+filtered_results = [res for res in exp_results if (res["task_id"] == selected_task_id or selected_task_id == "all")]
+
+# Apply run filter
+filtered_results = [res for res in filtered_results if matches_filter(res, run_filter)]
+
+total_runs = len(filtered_results)
+success_runs = len([res for res in filtered_results if res["is_success"]])
 success_rate = (success_runs / total_runs * 100) if total_runs > 0 else 0
 
 col1, col2, col3 = st.columns(3)
