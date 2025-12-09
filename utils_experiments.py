@@ -24,3 +24,15 @@ def make_exp_folder(prefix="exp", suffix=None):
 
     os.makedirs(exp_folder, exist_ok=True)
     return exp_folder
+
+def get_experiment_type(exp_args):
+    sample_strategy = exp_args.get("sample_strategy", "iid")
+    backprop_method = exp_args.get("backprop_method", "grpo")
+    tree_degree = exp_args.get("tree_degree", None)
+    tree_depth = exp_args.get("tree_depth", None)
+    group_size = exp_args.get("group_size", None)
+    
+    if sample_strategy == "tree":
+        return f"tree-{tree_degree}^{tree_depth}_{backprop_method}"
+    else:
+        return f"iid-{group_size}_{backprop_method}"

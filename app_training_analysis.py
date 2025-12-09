@@ -5,6 +5,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from collections import defaultdict
+from utils_experiments import get_experiment_type
 
 st.set_page_config(page_title="Training Analysis", layout="wide")
 
@@ -33,18 +34,7 @@ def load_experiment_data():
             exp_args = json.load(f)
         
         learning_rate = exp_args["learning_rate"]
-
-        experiment_type = ""
-        sample_strategy = exp_args.get("sample_strategy", "iid")
-        backprop_method = exp_args.get("backprop_method", "grpo")
-        tree_degree = exp_args.get("tree_degree", None)
-        tree_depth = exp_args.get("tree_depth", None)
-        group_size = exp_args.get("group_size", None)
-        
-        if sample_strategy == "tree":
-            experiment_type = f"tree-{tree_degree}^{tree_depth}_{backprop_method}"
-        else:
-            experiment_type = f"iid-{group_size}_{backprop_method}"
+        experiment_type = get_experiment_type(exp_args)
         
         exp_logs = []
         with open(f"experiments/{exp}/logs.jsonl", "r") as f:
