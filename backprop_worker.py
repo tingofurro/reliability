@@ -101,6 +101,71 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
 
     return {"success": True}
 
+
+def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
+    reduction = args_dict.get("reduction", "sum")
+    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 24)
+    
+    # Filter responses with score of 1
+    correct_responses = [response for response in responses if response.get("score") == 1]
+    print(f"[Backprop Worker] Found {len(correct_responses)} responses with score=1 out of {len(responses)} total")
+    
+    if len(correct_responses) == 0:
+        print_colored("[Backprop Worker] No responses with score=1, skipping SFT", "yellow")
+        return None
+    
+    # Deduplicate responses by text content
+    seen_texts = set()
+    unique_responses = []
+    for response in correct_responses:
+        response_text = response.get("response_text", "")
+        if response_text and response_text not in seen_texts:
+            seen_texts.add(response_text)
+            unique_responses.append(response)
+    
+    num_responses = len(unique_responses)
+    print(f"[Backprop Worker] Using {num_responses} unique correct responses for SFT")
+    
+    if num_responses == 0:
+        print_colored("[Backprop Worker] No unique correct responses, skipping SFT", "yellow")
+        return None
+    
+    print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
+    
+    # Calculate chunk size for gradient accumulation
+    chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
+    num_chunks = (num_responses + chunk_size - 1) // chunk_size
+    print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
+    
+    # Process responses in chunks with gradient accumulation
+    for chunk_idx in range(num_chunks):
+        start_idx = chunk_idx * chunk_size
+        end_idx = min(start_idx + chunk_size, num_responses)
+        chunk_responses = unique_responses[start_idx:end_idx]
+        
+        print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
+        
+        # Get logprobs for this chunk
+        chunk_logprobs = []
+        for response in chunk_responses:
+            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
+            chunk_logprobs.append(logprob)
+        
+        chunk_logprobs = torch.stack(chunk_logprobs)
+        
+        # Compute loss for this chunk (normalized by total number of responses)
+        chunk_loss = -torch.sum(chunk_logprobs) / num_responses
+        
+        # Backward pass - accumulates gradients
+        chunk_loss.backward()
+        
+        # Clear tensors to save memory
+        del chunk_logprobs, chunk_loss
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
+    
+    return {"success": True}
+
 def backprop_worker_process(model_path, save_path, conversation, responses, args_dict, result_queue, error_queue):
     setproctitle.setproctitle("backprop_worker")
     
@@ -145,6 +210,8 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             grad_return = calculate_gradients_grpo(assistant_model, conversation, responses, args_dict)
         elif backprop_method == "kto":
             grad_return = calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
+        elif backprop_method == "sft":
+            grad_return = calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
         else:
             raise ValueError(f"Unknown backprop method: {backprop_method}")
         

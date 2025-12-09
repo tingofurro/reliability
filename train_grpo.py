@@ -25,13 +25,13 @@ parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
 parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree"])
 parser.add_argument("--group_size", type=int, default=100)
 parser.add_argument("--tree_degree", type=int, default=2)
-parser.add_argument("--tree_depth", type=int, default=7)
+parser.add_argument("--tree_depth", type=int, default=13)
 
 parser.add_argument("--num_eval_runs", type=int, default=500)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
-parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto"])
+parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto", "sft"])
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
 parser.add_argument("--max_iterations", type=int, default=25)
@@ -51,7 +51,6 @@ if not os.path.exists(model_save_path):
 args_path = os.path.join(exp_folder, "args.json")
 run_params = vars(args)
 run_params["experiment_name"] = exp_folder.split("/")[-1]
-run_params["training_method"] = "reinforce"
 with open(args_path, "w") as f:
     json.dump(run_params, f, indent=4)
 

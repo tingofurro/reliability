@@ -4,7 +4,8 @@ task_ids = ["sharded-livecodebench/2756", "sharded-livecodebench/2755", "sharded
 
 learning_rates = [5e-3]
 # group_sizes = [10, 20, 50, 100, 200, 500]
-params = [{"tree_depth": 7, "tree_degree": 2}, {"tree_depth": 8, "tree_degree": 2}, {"tree_depth": 9, "tree_degree": 2}]
+# params = [{"tree_depth": 7, "tree_degree": 2}, {"tree_depth": 8, "tree_degree": 2}, {"tree_depth": 9, "tree_degree": 2}]
+params = [{"backprop_method": "sft"}, {"backprop_method": "kto"}, {"backprop_method": "grpo"}]
 all_experiments = []
 for task_id in task_ids:
     for learning_rate in learning_rates:
@@ -20,6 +21,6 @@ for experiment in all_experiments:
     print(f"Running experiment: {task_id}, {learning_rate}, {param}")
 
     param_str = " ".join([f"--{k} {v}" for k, v in param.items()])
-    command = f"python train_grpo.py --task_id {task_id} --learning_rate {learning_rate} --sample_strategy tree --backprop_method kto {param_str}"
+    command = f"python train_grpo.py --task_id {task_id} --learning_rate {learning_rate} {param_str}"
     print(command)
     os.system(command)
