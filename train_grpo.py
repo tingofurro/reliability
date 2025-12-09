@@ -34,6 +34,7 @@ parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto", "sft"])
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
+parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--max_iterations", type=int, default=25)
 
 args = parser.parse_args()
@@ -204,12 +205,21 @@ while True:
     # Step 2: Backprop
     MODEL_PATH = f"{model_save_path}"
     
-    backprop_args = {"backprop_method": args.backprop_method, "learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "reduction": "sum"}
+    backprop_args = {"backprop_method": args.backprop_method, "learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "batch_size": args.batch_size, "reduction": "sum"}
     
     print(f"\n[Train] Starting backprop with {len(training_responses)} responses")
     backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=training_responses, args_dict=backprop_args, timeout=600)
     
-    if backprop_results and backprop_results["any_updates"]:
+    backprop_error = None
+    backprop_error_type = None
+    if backprop_results and "error" in backprop_results:
+        backprop_error = backprop_results["error"]
+        backprop_error_type = backprop_results.get("error_type", "general")
+        if backprop_error_type == "OOM":
+            print_colored(f"[Train] OOM Error during backprop: {backprop_error}", "red")
+        else:
+            print_colored(f"[Train] Error during backprop: {backprop_error}", "red")
+    elif backprop_results and backprop_results["any_updates"]:
         print(f"[Train] Backprop successful! Model saved to {MODEL_PATH}")
         print(f"[Train] Timings: {backprop_results['timings']}")
         CURRENT_LATEST_MODEL_PATH = MODEL_PATH
@@ -217,7 +227,7 @@ while True:
         print(f"[Train] No backprop updates applied")
     
 
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers)}
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type}
     with open(logs_path, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
 

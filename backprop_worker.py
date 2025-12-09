@@ -6,7 +6,7 @@ from utils import TeeOutput, print_colored
 def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
-    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 24)
+    batch_size = args_dict.get("batch_size", 16)
 
     # Extract scores and compute advantages
     scores = np.array([response["score"] for response in responses])
@@ -39,40 +39,39 @@ def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict
 
     num_responses = len(selected_responses)
     print(f"[Backprop Worker] Using {num_responses} responses for backprop")
-    print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
     
-    # Calculate chunk size for gradient accumulation
-    chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
-    num_chunks = (num_responses + chunk_size - 1) // chunk_size
-    print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
+    # Calculate number of gradient accumulation steps based on fixed batch size
+    num_steps = (num_responses + batch_size - 1) // batch_size
+    print(f"[Backprop Worker] Using batch_size={batch_size}, gradient accumulation steps={num_steps}")
+    print(f"[Backprop Worker] Processing {num_steps} batches of up to {batch_size} responses each")
 
-    # Process responses in chunks with gradient accumulation
-    for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * chunk_size
-        end_idx = min(start_idx + chunk_size, num_responses)
-        chunk_responses = selected_responses[start_idx:end_idx]
-        chunk_advantages = selected_advantages[start_idx:end_idx]
+    # Process responses in batches with gradient accumulation
+    for step_idx in range(num_steps):
+        start_idx = step_idx * batch_size
+        end_idx = min(start_idx + batch_size, num_responses)
+        batch_responses = selected_responses[start_idx:end_idx]
+        batch_advantages = selected_advantages[start_idx:end_idx]
         
-        print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
+        print(f"[Backprop Worker] Processing batch {step_idx + 1}/{num_steps} (responses {start_idx}-{end_idx})")
         
-        # Get logprobs for this chunk
-        chunk_logprobs = []
-        for response in chunk_responses:
+        # Get logprobs for this batch
+        batch_logprobs = []
+        for response in batch_responses:
             logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
-            chunk_logprobs.append(logprob)
+            batch_logprobs.append(logprob)
         
-        chunk_logprobs = torch.stack(chunk_logprobs)
+        batch_logprobs = torch.stack(batch_logprobs)
         
-        # Compute loss for this chunk (normalized by total number of responses)
-        chunk_loss = -torch.sum(chunk_advantages * chunk_logprobs) / num_responses
+        # Compute loss for this batch (normalized by total number of responses)
+        batch_loss = -torch.sum(batch_advantages * batch_logprobs) / num_responses
         
         # Backward pass - accumulates gradients
-        chunk_loss.backward()
+        batch_loss.backward()
         
         # Clear tensors to save memory
-        del chunk_logprobs, chunk_loss
+        del batch_logprobs, batch_loss
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
+        print(f"[Backprop Worker] Batch {step_idx + 1}/{num_steps} completed")
     return {"success": True}
 
 
@@ -104,7 +103,7 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
 
 def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
-    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 24)
+    batch_size = args_dict.get("batch_size", 16)
     
     # Filter responses with score of 1
     correct_responses = [response for response in responses if response.get("score") == 1]
@@ -130,39 +129,37 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
         print_colored("[Backprop Worker] No unique correct responses, skipping SFT", "yellow")
         return None
     
-    print(f"[Backprop Worker] Using gradient accumulation with {gradient_accumulation_steps} steps")
+    # Calculate number of gradient accumulation steps based on fixed batch size
+    num_steps = (num_responses + batch_size - 1) // batch_size
+    print(f"[Backprop Worker] Using batch_size={batch_size}, gradient accumulation steps={num_steps}")
+    print(f"[Backprop Worker] Processing {num_steps} batches of up to {batch_size} responses each")
     
-    # Calculate chunk size for gradient accumulation
-    chunk_size = (num_responses + gradient_accumulation_steps - 1) // gradient_accumulation_steps
-    num_chunks = (num_responses + chunk_size - 1) // chunk_size
-    print(f"[Backprop Worker] Processing {num_chunks} chunks of ~{chunk_size} responses each")
-    
-    # Process responses in chunks with gradient accumulation
-    for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * chunk_size
-        end_idx = min(start_idx + chunk_size, num_responses)
-        chunk_responses = unique_responses[start_idx:end_idx]
+    # Process responses in batches with gradient accumulation
+    for step_idx in range(num_steps):
+        start_idx = step_idx * batch_size
+        end_idx = min(start_idx + batch_size, num_responses)
+        batch_responses = unique_responses[start_idx:end_idx]
         
-        print(f"[Backprop Worker] Processing chunk {chunk_idx + 1}/{num_chunks} (responses {start_idx}-{end_idx})")
+        print(f"[Backprop Worker] Processing batch {step_idx + 1}/{num_steps} (responses {start_idx}-{end_idx})")
         
-        # Get logprobs for this chunk
-        chunk_logprobs = []
-        for response in chunk_responses:
+        # Get logprobs for this batch
+        batch_logprobs = []
+        for response in batch_responses:
             logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
-            chunk_logprobs.append(logprob)
+            batch_logprobs.append(logprob)
         
-        chunk_logprobs = torch.stack(chunk_logprobs)
+        batch_logprobs = torch.stack(batch_logprobs)
         
-        # Compute loss for this chunk (normalized by total number of responses)
-        chunk_loss = -torch.sum(chunk_logprobs) / num_responses
+        # Compute loss for this batch (normalized by total number of responses)
+        batch_loss = -torch.sum(batch_logprobs) / num_responses
         
         # Backward pass - accumulates gradients
-        chunk_loss.backward()
+        batch_loss.backward()
         
         # Clear tensors to save memory
-        del chunk_logprobs, chunk_loss
+        del batch_logprobs, batch_loss
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        print(f"[Backprop Worker] Chunk {chunk_idx + 1}/{num_chunks} completed")
+        print(f"[Backprop Worker] Batch {step_idx + 1}/{num_steps} completed")
     
     return {"success": True}
 
@@ -176,7 +173,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     backprop_method = args_dict.get("backprop_method", "grpo")
     reduction = args_dict.get("reduction", "sum")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
-    gradient_accumulation_steps = args_dict.get("gradient_accumulation_steps", 8)
+    batch_size = args_dict.get("batch_size", 16)
 
     # Load model and optimizer
     T_model_load_start = time.time()
@@ -241,9 +238,12 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
         
         # Send results back
         result_queue.put(results)
+    except torch.OutOfMemoryError as e:
+        print_colored(f"[Backprop Worker] OOM Error in backprop: {e}", "red")
+        error_queue.put({"error": str(e), "error_type": "OOM", "traceback": traceback.format_exc()})
     except Exception as e:
         print(f"[Backprop Worker] Error in backprop: {e}")
-        error_queue.put({"error": str(e), "traceback": traceback.format_exc()})
+        error_queue.put({"error": str(e), "error_type": "general", "traceback": traceback.format_exc()})
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
@@ -282,7 +282,7 @@ class BackpropWorker:
             error_info = self.error_queue.get()
             print(f"[Backprop Manager] Error in backprop worker: {error_info['error']}")
             print(f"[Backprop Manager] Traceback: {error_info['traceback']}")
-            return None
+            return {"any_updates": False, "error": error_info["error"], "error_type": error_info.get("error_type", "general"), "traceback": error_info["traceback"]}
         
         if not self.result_queue.empty():
             results = self.result_queue.get()
