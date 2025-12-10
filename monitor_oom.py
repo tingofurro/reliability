@@ -7,23 +7,30 @@ def print_colored(text, color):
     colors = {"red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m", "blue": "\033[94m", "reset": "\033[0m"}
     print(f"{colors.get(color, '')}{text}{colors['reset']}")
 
-def check_experiment_for_oom(exp_path, exp_name):
+def check_experiment_for_errors(exp_path, exp_name):
     logs_path = os.path.join(exp_path, "logs.jsonl")
     
     if not os.path.exists(logs_path):
         return None
     
-    oom_issues = []
+    errors = {"oom": [], "timeout": [], "other": []}
     with open(logs_path, "r") as f:
         for line_num, line in enumerate(f, 1):
             try:
                 log_entry = json.loads(line)
-                if log_entry.get("backprop_error_type") == "OOM":
-                    oom_issues.append({"iteration": log_entry.get("iteration", "unknown"), "error": log_entry.get("backprop_error", "Unknown error"), "line": line_num})
+                error_type = log_entry.get("backprop_error_type")
+                if error_type == "OOM":
+                    errors["oom"].append({"iteration": log_entry.get("iteration", "unknown"), "error": log_entry.get("backprop_error", "Unknown error"), "line": line_num})
+                elif error_type == "timeout":
+                    errors["timeout"].append({"iteration": log_entry.get("iteration", "unknown"), "error": log_entry.get("backprop_error", "Unknown error"), "line": line_num})
+                elif error_type and error_type != "OOM" and error_type != "timeout":
+                    errors["other"].append({"iteration": log_entry.get("iteration", "unknown"), "error": log_entry.get("backprop_error", "Unknown error"), "line": line_num, "type": error_type})
             except json.JSONDecodeError:
                 continue
     
-    return oom_issues if oom_issues else None
+    if errors["oom"] or errors["timeout"] or errors["other"]:
+        return errors
+    return None
 
 def get_experiment_info(exp_path):
     args_path = os.path.join(exp_path, "args.json")
@@ -66,16 +73,25 @@ def monitor_experiments(experiments_dir="experiments", time_window_minutes=30, c
     print_colored(f"\nChecking {len(active_experiments)} active experiments (last {time_window_minutes} minutes):", "blue")
     print("-" * 80)
     
-    oom_found = False
+    errors_found = False
     for exp_name, exp_path, last_modified in active_experiments:
-        oom_issues = check_experiment_for_oom(exp_path, exp_name)
+        errors = check_experiment_for_errors(exp_path, exp_name)
         exp_info = get_experiment_info(exp_path)
         experiment_type = get_experiment_type(exp_info)
         
-        if oom_issues:
-            oom_found = True
+        if errors:
+            errors_found = True
             
-            print_colored(f"\n⚠️  OOM DETECTED in: {exp_name}", "red")
+            error_types = []
+            if errors["oom"]:
+                error_types.append("OOM")
+            if errors["timeout"]:
+                error_types.append("TIMEOUT")
+            if errors["other"]:
+                error_types.append("ERROR")
+            
+            error_label = " + ".join(error_types)
+            print_colored(f"\n⚠️  {error_label} DETECTED in: {exp_name}", "red")
             print_colored(f"   Last modified: {last_modified.strftime('%Y-%m-%d %H:%M:%S')}", "yellow")
             
             task_id = exp_info.get("task_id", "unknown")
@@ -84,21 +100,41 @@ def monitor_experiments(experiments_dir="experiments", time_window_minutes=30, c
             print(f"   Task: {task_id}")
             print(f"   Type: {experiment_type}, Batch size: {batch_size}")
             
-            for issue in oom_issues:
-                print_colored(f"   - Iteration {issue['iteration']}: {issue['error'][:100]}...", "yellow")
+            if errors["oom"]:
+                print_colored(f"   OOM Errors ({len(errors['oom'])}):", "red")
+                for issue in errors["oom"]:
+                    print_colored(f"   - Iteration {issue['iteration']}: {issue['error'][:100]}...", "yellow")
             
-            print_colored(f"   💡 Suggestion: Try reducing --batch_size (current: {batch_size})", "blue")
+            if errors["timeout"]:
+                print_colored(f"   Timeout Errors ({len(errors['timeout'])}):", "red")
+                for issue in errors["timeout"]:
+                    print_colored(f"   - Iteration {issue['iteration']}: {issue['error'][:100]}...", "yellow")
+            
+            if errors["other"]:
+                print_colored(f"   Other Errors ({len(errors['other'])}):", "red")
+                for issue in errors["other"]:
+                    print_colored(f"   - Iteration {issue['iteration']} [{issue['type']}]: {issue['error'][:100]}...", "yellow")
+            
+            suggestions = []
+            if errors["oom"]:
+                suggestions.append(f"Try reducing --batch_size (current: {batch_size})")
+            if errors["timeout"]:
+                suggestions.append("Try reducing --group_size or --tree_depth to process fewer samples")
+            
+            if suggestions:
+                for suggestion in suggestions:
+                    print_colored(f"   💡 Suggestion: {suggestion}", "blue")
         else:
-            print_colored(f"✓ {exp_name} - {experiment_type} - No OOM (last modified: {last_modified.strftime('%H:%M:%S')})", "green")
+            print_colored(f"✓ {exp_name} - {experiment_type} - No errors (last modified: {last_modified.strftime('%H:%M:%S')})", "green")
     
     print("-" * 80)
     
-    if oom_found:
-        print_colored(f"\n⚠️  OOM errors detected! Check experiments above.", "red")
+    if errors_found:
+        print_colored(f"\n⚠️  Errors detected! Check experiments above.", "red")
     else:
-        print_colored(f"\n✓ All active experiments running without OOM errors", "green")
+        print_colored(f"\n✓ All active experiments running without errors", "green")
     
-    return oom_found
+    return errors_found
 
 def main():
     parser = argparse.ArgumentParser(description="Monitor experiments for OOM errors")

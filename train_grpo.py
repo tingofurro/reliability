@@ -212,7 +212,11 @@ while True:
     
     backprop_error = None
     backprop_error_type = None
-    if backprop_results and "error" in backprop_results:
+    if backprop_results is None:
+        backprop_error = "Backprop worker timed out after 1800 seconds"
+        backprop_error_type = "timeout"
+        print_colored(f"[Train] Timeout Error during backprop: {backprop_error}", "red")
+    elif backprop_results and "error" in backprop_results:
         backprop_error = backprop_results["error"]
         backprop_error_type = backprop_results.get("error_type", "general")
         if backprop_error_type == "OOM":
