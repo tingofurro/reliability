@@ -35,6 +35,10 @@ def load_experiment_data():
         
         learning_rate = exp_args["learning_rate"]
         experiment_type = get_experiment_type(exp_args)
+        sample_strategy = exp_args.get("sample_strategy", None)
+        tree_degree = exp_args.get("tree_degree", None)
+        tree_depth = exp_args.get("tree_depth", None)
+        group_size = exp_args.get("group_size", None)
         
         exp_logs = []
         with open(f"experiments/{exp}/logs.jsonl", "r") as f:
