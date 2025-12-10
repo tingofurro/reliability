@@ -1,4 +1,4 @@
-from llms.genserv.utils_prefix_tree import build_prefix_tree, calculate_backtrack_scores, get_backprop_ops, visualize_prefix_tree
+from llms.genserv.utils_prefix_tree import build_prefix_tree, calculate_backtrack_scores, get_backprop_ops, filter_ops_by_margin, form_node_groups
 import multiprocessing, torch, numpy as np, setproctitle, os, time, traceback, sys
 from model_generator_hf import GenerationModel
 from utils import TeeOutput, print_colored
@@ -78,35 +78,63 @@ def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict
 
 
 def calculate_gradients_kto(assistant_model, conversation, responses, args_dict):
+    
+    kto_margin = args_dict.get("kto_margin", None)
+    accumulation_steps = args_dict.get("kto_accumulation_steps", 50)
+
     prefix_tree = build_prefix_tree(responses)
     calculate_backtrack_scores(prefix_tree)
     backprop_ops = get_backprop_ops(prefix_tree)
+    selected_ops = backprop_ops
+    if kto_margin is not None:
+        selected_ops = filter_ops_by_margin(backprop_ops, kto_margin)
 
-    print(f"[Backprop Worker] Found {len(backprop_ops)} backprop operations")
+    print(f"[Backprop Worker] Selected {len(selected_ops)} / {len(backprop_ops)} backprop operations (margin: {kto_margin})")
 
-    total_loss = torch.tensor(0.0, device=assistant_model.device, requires_grad=True)
+    node_id2op = {op["node_id"]: op for op in selected_ops}
 
-    for op_idx, backprop_op in enumerate(backprop_ops):
-        prefix = backprop_op["prefix"]
-        options = backprop_op["options"]
-        branch_token_ids = [option["branch_tokens"][0] for option in options]
+    grouped_node_ids = form_node_groups([op["node_id"] for op in selected_ops])
+    print(f"[Backprop Worker] Formed {len(grouped_node_ids)} node groups")
+    print(f"[Backprop Worker] Using accumulation_steps={accumulation_steps} (backward every {accumulation_steps} groups)")
 
-        branch_logprobs = assistant_model.get_branch_logprobs(conversation, prefix, branch_token_ids)
-        advantages = [option["advantage"] for option in options]
-        advantages = torch.tensor(advantages).to(assistant_model.device)
+    accumulated_loss = torch.tensor(0.0, device=assistant_model.device, requires_grad=True)
+    groups_in_current_batch = 0
 
-        chunk_loss = -torch.sum(advantages * branch_logprobs)
-        total_loss += chunk_loss
+    for group_idx, group in enumerate(grouped_node_ids):
+        root_op = node_id2op[group["root_node_id"]]
 
-        del branch_logprobs, chunk_loss, advantages
-        print(f"[Backprop Worker] Backprop operation {op_idx + 1}/{len(backprop_ops)} completed")
+        logprobs = assistant_model.get_prefix_logprobs(conversation, root_op["prefix"])
 
-    avg_loss = total_loss / len(backprop_ops)
-    avg_loss.backward()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        for common_node_id in group["common_node_ids"]:
+            common_op = node_id2op[common_node_id]
+            options = common_op["options"]
+            option_token_ids = [option["branch_tokens"][0] for option in options]
+            prefix = common_op["prefix"]
 
+            branch_token_logprobs = logprobs[0, len(prefix)-1, option_token_ids]
+            advantages = [option["advantage"] for option in options]
+            advantages = torch.tensor(advantages).to(assistant_model.device)
+
+            chunk_loss = -torch.sum(advantages * branch_token_logprobs)
+            accumulated_loss = accumulated_loss + chunk_loss
+
+        groups_in_current_batch += 1
+
+        # Periodic backward pass every accumulation_steps groups or at the end
+        if (group_idx + 1) % accumulation_steps == 0 or (group_idx + 1) == len(grouped_node_ids):
+            avg_loss = accumulated_loss / groups_in_current_batch
+            avg_loss.backward()
+            print(f"[Backprop Worker] Backward pass completed for groups {group_idx + 1 - groups_in_current_batch + 1}-{group_idx + 1}")
+            
+            # Reset for next batch
+            accumulated_loss = torch.tensor(0.0, device=assistant_model.device, requires_grad=True)
+            groups_in_current_batch = 0
+            
+            # Clear cache after backward
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    print(f"[Backprop Worker] Completed all backward passes.")
     return {"success": True}
-
 
 def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
