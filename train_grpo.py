@@ -1,10 +1,10 @@
 import argparse, json, random, torch, time, numpy as np, re, os, tqdm
+from utils import print_colored, DoublePrint, get_git_version
 from llms.genserv.client import GenerationServiceClient
 from evalserv_client import EvaluationServiceClient
 from utils_tmux import start_gen_and_eval_sessions
 from concurrent.futures import ThreadPoolExecutor
 from utils_experiments import make_exp_folder
-from utils import print_colored, DoublePrint
 from backprop_worker import BackpropWorker
 from collections import Counter
 from tasks import get_task
@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser()
 # Basics
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
 parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
-parser.add_argument("--task_id", type=str, default="sharded-HumanEval/76")
+parser.add_argument("--task_id", type=str, default="sharded-livecodebench/2857")
 parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree"])
 parser.add_argument("--group_size", type=int, default=100)
 parser.add_argument("--tree_degree", type=int, default=2)
@@ -52,6 +52,7 @@ if not os.path.exists(model_save_path):
 
 args_path = os.path.join(exp_folder, "args.json")
 run_params = vars(args)
+run_params["git_version"] = get_git_version()
 run_params["experiment_name"] = exp_folder.split("/")[-1]
 with open(args_path, "w") as f:
     json.dump(run_params, f, indent=4)

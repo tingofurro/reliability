@@ -43,6 +43,13 @@ def extract_gpu_details():
         except (subprocess.CalledProcessError, FileNotFoundError):
             return {"gpu_name": "Unknown", "num_gpus": 0}
 
+def get_git_version():
+    try:
+        result = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "Unknown"
+
 def calculate_gpu_concurrency():
     gpu2concurrency = {"NVIDIA A100 80GB PCIe": 45, "NVIDIA A100 40GB": 10, "NVIDIA RTX A6000": 11, "NVIDIA H100 80GB HBM3": 45, "NVIDIA A100-SXM4-40GB": 10}
     gpu_details = extract_gpu_details()
@@ -278,3 +285,4 @@ class TeeOutput:
 
 if __name__ == "__main__":
     print(calculate_gpu_concurrency())
+    print(get_git_version())
