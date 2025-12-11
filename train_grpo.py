@@ -128,6 +128,7 @@ def generate_tree_responses(conversation, tree_depth, tree_degree):
     tree_complete = False
     
     while not tree_complete or active_eval_jobs:
+        print(f"Number of responses: {len(responses)}; Number of active evaluation jobs: {len(active_eval_jobs)}")
         # Check for new tree nodes
         if not tree_complete:
             tree_status = assistant_gen_client.check_on_tree(job_id, only_new=True)
