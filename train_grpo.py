@@ -120,35 +120,48 @@ def run_evaluation_phase(conversation, num_eval_runs):
 def generate_tree_responses(conversation, tree_depth, tree_degree):
     T1 = time.time()
     tree_job = assistant_gen_client.build_tree(conversation, depth=tree_depth, degree=tree_degree)
-    tree_response = assistant_gen_client.wait_for_tree_completion(tree_job["job_id"])
-    T2 = time.time()
-    print(f"Tree generation completed in {T2 - T1:.2f} seconds")
-    responses = tree_response["tree"]
-
-    eval_jobs = []
-    for response in responses:
-        eval_job = eval_client.schedule_evaluation(
-            conversation=conversation + [{"role": "assistant", "content": response["response_text"]}], 
-            task_name=sample["task"], 
-            sample=sample
-        )
-        eval_jobs.append({"job_id": eval_job["job_id"], "response": response})
+    job_id = tree_job["job_id"]
     
-    # Wait for all evaluation jobs to complete
-    pending_eval_jobs = eval_jobs.copy()
-    while pending_eval_jobs:
-        for eval_job_info in pending_eval_jobs[:]:
-            eval_response = eval_client.check_job(eval_job_info["job_id"])
-            if eval_response["status"] == "completed":
-                eval_job_info["response"]["score"] = eval_response["result"]["evaluation_return"]["score"]
-                pending_eval_jobs.remove(eval_job_info)
-            elif eval_response["status"] == "error":
-                eval_job_info["response"]["score"] = 0
-                pending_eval_jobs.remove(eval_job_info)
-        if pending_eval_jobs:
-            time.sleep(0.1)
+    responses = []
+    eval_job_id2response = {}
+    active_eval_jobs = []
+    tree_complete = False
+    
+    while not tree_complete or active_eval_jobs:
+        # Check for new tree nodes
+        if not tree_complete:
+            tree_status = assistant_gen_client.check_on_tree(job_id, only_new=True)
+            
+            if tree_status.get("status") == "completed":
+                tree_complete = True
+                T2 = time.time()
+                print(f"Tree generation completed in {T2 - T1:.2f} seconds")
+            
+            # Schedule evaluations for newly generated nodes
+            new_nodes = tree_status.get("tree", [])
+            for response in new_nodes:
+                responses.append(response)
+                this_conversation = conversation + [{"role": "assistant", "content": response["response_text"]}]
+                eval_job_result = eval_client.schedule_evaluation(conversation=this_conversation, task_name=sample["task"], sample=sample)
+                active_eval_jobs.append({"job_id": eval_job_result["job_id"]})
+                eval_job_id2response[eval_job_result["job_id"]] = response
+        
+        # Check on active evaluation jobs
+        for job_info in active_eval_jobs[:]:
+            job_result = eval_client.check_job(job_info["job_id"])
+            if job_result["status"] == "completed" and "evaluation_return" in job_result["result"]:
+                active_eval_jobs.remove(job_info)
+                response = eval_job_id2response[job_info["job_id"]]
+                response["score"] = job_result["result"]["evaluation_return"]["score"]
+            elif job_result["status"] == "error" or (job_result["status"] == "completed" and "evaluation_return" not in job_result["result"]):
+                active_eval_jobs.remove(job_info)
+                response = eval_job_id2response[job_info["job_id"]]
+                response["score"] = 0
+        
+        time.sleep(0.1)
+    
     T3 = time.time()
-    print(f"Evaluation completed in {T3 - T2:.2f} seconds")
+    print(f"Total time (tree + eval overlapped): {T3 - T1:.2f} seconds")
     return responses
 
 def run_training_phase(conversation, sample_strategy, group_size, tree_depth, tree_degree):
