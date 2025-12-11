@@ -45,8 +45,6 @@ def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict
     print(f"[Backprop Worker] Using batch_size={batch_size}, gradient accumulation steps={num_steps}")
     print(f"[Backprop Worker] Processing {num_steps} batches of up to {batch_size} responses each")
 
-    total_loss = torch.tensor(0.0, device=assistant_model.device, requires_grad=True)
-
     # Process responses in batches with gradient accumulation
     for step_idx in range(num_steps):
         start_idx = step_idx * batch_size
@@ -66,14 +64,12 @@ def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict
         
         # Compute loss for this batch (normalized by total number of responses)
         batch_loss = -torch.sum(batch_advantages * batch_logprobs) / num_responses
-        total_loss = total_loss + batch_loss
-        
+        batch_loss.backward()
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
         # Clear tensors to save memory
         del batch_logprobs, batch_loss, batch_advantages
-        print(f"[Backprop Worker] Batch {step_idx + 1}/{num_steps} completed")
 
-    total_loss.backward()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
     return {"success": True}
 
 
@@ -138,7 +134,7 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
 
 def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
-    batch_size = args_dict.get("batch_size", 16)
+    batch_size = args_dict.get("batch_size", 32)
     
     # Filter responses with score of 1
     correct_responses = [response for response in responses if response.get("score") == 1]
@@ -169,34 +165,29 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
     print(f"[Backprop Worker] Using batch_size={batch_size}, gradient accumulation steps={num_steps}")
     print(f"[Backprop Worker] Processing {num_steps} batches of up to {batch_size} responses each")
 
-    total_loss = torch.tensor(0.0, device=assistant_model.device, requires_grad=True)
-    
     # Process responses in batches with gradient accumulation
+    T_start = time.time()
     for step_idx in range(num_steps):
         start_idx = step_idx * batch_size
         end_idx = min(start_idx + batch_size, num_responses)
         batch_responses = unique_responses[start_idx:end_idx]
         
-        print(f"[Backprop Worker] Processing batch {step_idx + 1}/{num_steps} (responses {start_idx}-{end_idx})")
-        
-        # Get logprobs for this batch
+        print(f"[Backprop Worker] Processing batch {step_idx + 1}/{num_steps} (responses {start_idx}-{end_idx}) {time.time() - T_start:.2f}s")
+
+        # Below requires too much memory, instead do it one by one
+        # batch_logprobs, input_outputs = assistant_model.get_logprobs(conversation, batch_responses, reduction=reduction, cached_ios=input_outputs, return_ios=True)
+
         batch_logprobs = []
         for response in batch_responses:
-            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)[0]
+            logprob = assistant_model.get_logprobs(conversation, [response], reduction=reduction)
             batch_logprobs.append(logprob)
-        
         batch_logprobs = torch.stack(batch_logprobs)
         
-        # Compute loss for this batch (normalized by total number of responses)
         batch_loss = -torch.sum(batch_logprobs) / num_responses
-        total_loss = total_loss + batch_loss
+        batch_loss.backward()
         
-        # Clear tensors to save memory
         del batch_logprobs, batch_loss
-        print(f"[Backprop Worker] Batch {step_idx + 1}/{num_steps} completed")
-
-    total_loss.backward()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
     return {"success": True}
 
