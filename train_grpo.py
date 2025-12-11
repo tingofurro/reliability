@@ -118,8 +118,11 @@ def run_evaluation_phase(conversation, num_eval_runs):
     return responses
 
 def generate_tree_responses(conversation, tree_depth, tree_degree):
+    T1 = time.time()
     tree_job = assistant_gen_client.build_tree(conversation, depth=tree_depth, degree=tree_degree)
     tree_response = assistant_gen_client.wait_for_tree_completion(tree_job["job_id"])
+    T2 = time.time()
+    print(f"Tree generation completed in {T2 - T1:.2f} seconds")
     responses = tree_response["tree"]
 
     eval_jobs = []
@@ -144,6 +147,8 @@ def generate_tree_responses(conversation, tree_depth, tree_degree):
                 pending_eval_jobs.remove(eval_job_info)
         if pending_eval_jobs:
             time.sleep(0.1)
+    T3 = time.time()
+    print(f"Evaluation completed in {T3 - T2:.2f} seconds")
     return responses
 
 def run_training_phase(conversation, sample_strategy, group_size, tree_depth, tree_degree):
