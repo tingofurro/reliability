@@ -1,8 +1,8 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch, os
+import torch, os, time
 
 class GenerationModel:
-    def __init__(self, model_name="microsoft/phi-4", device=None, max_batch_size=2):
+    def __init__(self, model_name="microsoft/phi-4", device=None, device_map="auto", max_batch_size=2):
         # place_model_to_shm.py will place the model. Run it before so the first-ever loading is faster
         load_path = f"/dev/shm/{model_name}" if os.path.exists(f"/dev/shm/{model_name}") else model_name
         if device is None:
@@ -11,7 +11,7 @@ class GenerationModel:
             self.model = AutoModelForCausalLM.from_pretrained(
                 load_path,
                 torch_dtype=torch.float16,
-                device_map="auto"
+                device_map=device_map
             )
         else:
             self.device = device
@@ -103,7 +103,7 @@ class GenerationModel:
 
         return responses
 
-    def get_logprobs(self, conversation, responses, use_grad=True, reduction="sum"):
+    def get_logprobs(self, conversation, responses, use_grad=True, reduction="sum", cached_ios=None, return_ios=False):
         end_token_ids = self.tokenizer.eos_token_id
         # First process inputs without gradients
         inputs = self.construct_inputs(conversation)
@@ -113,8 +113,12 @@ class GenerationModel:
         input_ids = input_ids[:, :-1]
 
         # never need grads on the input
-        with torch.no_grad():
-            input_outputs = self.model(input_ids, return_dict=True)
+        if cached_ios is None:
+            T = time.time()
+            with torch.no_grad():
+                input_outputs = self.model(input_ids, return_dict=True)
+        else:
+            input_outputs = cached_ios
 
         output_token_ids = [response["response_tokens"] for response in responses]
         max_length = max([len(response) for response in output_token_ids])
@@ -151,7 +155,10 @@ class GenerationModel:
             else:
                 raise ValueError(f"Invalid reduction: {reduction}")
         response_logprobs = torch.stack(response_logprobs)
-        return response_logprobs
+        if return_ios:
+            return response_logprobs, input_outputs
+        else:
+            return response_logprobs
 
     def get_prefix_logprobs(self, conversation, prefix_tokens, use_grad=True):
         inputs = self.construct_inputs(conversation)
