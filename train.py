@@ -110,7 +110,7 @@ def generate_responses(conversation, group_size):
                 active_eval_jobs.remove(job_info)
                 response = eval_job_id2response[job_info["job_id"]]
                 response["score"] = 0
-        time.sleep(0.1)
+        time.sleep(5.0)
     return responses
 
 def run_evaluation_phase(conversation, num_eval_runs):
@@ -159,7 +159,7 @@ def generate_tree_responses(conversation, tree_depth, tree_degree):
                 response = eval_job_id2response[job_info["job_id"]]
                 response["score"] = 0
         
-        time.sleep(0.1)
+        time.sleep(5.0)
     
     T3 = time.time()
     print(f"Total time (tree + eval overlapped): {T3 - T1:.2f} seconds")
