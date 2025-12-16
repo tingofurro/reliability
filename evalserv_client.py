@@ -24,10 +24,24 @@ class EvaluationServiceClient:
         response = requests.post(url, json=data)
         return response.json()
 
+    def schedule_evaluation_batch(self, evaluations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Schedule multiple evaluation jobs in batch"""
+        url = f"{self.base_url}/schedule_evaluation_batch"
+        data = {"evaluations": evaluations}
+        response = requests.post(url, json=data)
+        return response.json()
+
     def check_job(self, job_id: str) -> Dict[str, Any]:
         """Check the status of an evaluation job"""
         url = f"{self.base_url}/check_evaluation_job"
         response = requests.get(url, params={"job_id": job_id})
+        return response.json()
+
+    def check_job_batch(self, job_ids: List[str]) -> Dict[str, Any]:
+        """Check the status of multiple evaluation jobs in batch"""
+        url = f"{self.base_url}/check_evaluation_job_batch"
+        data = {"job_ids": job_ids}
+        response = requests.post(url, json=data)
         return response.json()
 
     def get_status(self) -> Dict[str, Any]:

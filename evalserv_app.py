@@ -97,6 +97,66 @@ def schedule_evaluation():
             'error': str(e)
         }), 500
 
+@app.route('/schedule_evaluation_batch', methods=['POST'])
+def schedule_evaluation_batch():
+    """Schedule multiple evaluation jobs in batch"""
+    global evaluation_service
+    
+    try:
+        if evaluation_service is None:
+            return jsonify({
+                'error': 'Evaluation service not available'
+            }), 503
+        
+        # Get evaluation parameters from request
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'error': 'JSON body is required'
+            }), 400
+        
+        if 'evaluations' not in data:
+            return jsonify({
+                'error': 'evaluations parameter is required in JSON body'
+            }), 400
+        
+        evaluations = data['evaluations']
+        if not isinstance(evaluations, list):
+            return jsonify({
+                'error': 'evaluations must be a list'
+            }), 400
+        
+        # Validate each evaluation has required fields
+        required_fields = ['conversation', 'task_name', 'sample']
+        for i, eval_data in enumerate(evaluations):
+            for field in required_fields:
+                if field not in eval_data:
+                    return jsonify({
+                        'error': f'Evaluation {i}: {field} parameter is required'
+                    }), 400
+        
+        # Schedule all evaluation jobs
+        job_ids = []
+        for eval_data in evaluations:
+            job_id = evaluation_service.schedule_evaluation(
+                conversation=eval_data['conversation'],
+                task_name=eval_data['task_name'],
+                sample=eval_data['sample']
+            )
+            job_ids.append(job_id)
+        
+        return jsonify({
+            'status': 'success',
+            'job_ids': job_ids,
+            'message': f'Successfully scheduled {len(job_ids)} evaluation jobs'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 @app.route('/check_evaluation_job', methods=['GET'])
 def check_evaluation_job():
     """Check the status of an evaluation job"""
@@ -119,6 +179,51 @@ def check_evaluation_job():
         result = evaluation_service.check_evaluation_job(job_id)
         
         return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/check_evaluation_job_batch', methods=['POST'])
+def check_evaluation_job_batch():
+    """Check the status of multiple evaluation jobs in batch"""
+    global evaluation_service
+    
+    try:
+        if evaluation_service is None:
+            return jsonify({
+                'error': 'Evaluation service not available'
+            }), 503
+        
+        # Get job_ids from request body
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'error': 'JSON body is required'
+            }), 400
+        
+        if 'job_ids' not in data:
+            return jsonify({
+                'error': 'job_ids parameter is required in JSON body'
+            }), 400
+        
+        job_ids = data['job_ids']
+        if not isinstance(job_ids, list):
+            return jsonify({
+                'error': 'job_ids must be a list'
+            }), 400
+        
+        # Check status for all jobs
+        results = {}
+        for job_id in job_ids:
+            results[job_id] = evaluation_service.check_evaluation_job(job_id)
+        
+        return jsonify({
+            'status': 'success',
+            'results': results
+        })
         
     except Exception as e:
         return jsonify({
@@ -182,7 +287,7 @@ if __name__ == '__main__':
     
     # Get number of workers from environment variable or use default
 
-    num_workers = int(os.environ.get('EVAL_WORKERS', 1000)) # calculate_gpu_concurrency()["total_concurrency"])
+    num_workers = int(os.environ.get('EVAL_WORKERS', 200)) # calculate_gpu_concurrency()["total_concurrency"])
     
     # Initialize evaluation service automatically on startup
     print_colored(f"Initializing evaluation service with {num_workers} workers...", "yellow")
@@ -196,7 +301,9 @@ if __name__ == '__main__':
     print("Available endpoints:")
     print("  POST /shutdown_service - Shutdown the evaluation service")
     print("  POST /schedule_evaluation - Schedule an evaluation job")
+    print("  POST /schedule_evaluation_batch - Schedule multiple evaluation jobs")
     print("  GET /check_evaluation_job?job_id=<id> - Check evaluation job status")
+    print("  POST /check_evaluation_job_batch - Check multiple evaluation jobs status")
     print("  GET /status - Get service status")
     print("  GET /health - Health check")
     print(f"\nEvaluation service running with {num_workers} workers (set EVAL_WORKERS env var to change)")
