@@ -5,7 +5,12 @@ task_ids = ["sharded-livecodebench/2756", "sharded-livecodebench/2755", "sharded
 learning_rates = [5e-3]
 # group_sizes = [10, 20, 50, 100, 200, 500]
 # params = [{"tree_depth": 7, "tree_degree": 2}, {"tree_depth": 8, "tree_degree": 2}, {"tree_depth": 9, "tree_degree": 2}]
-params = [{"backprop_method": "kto"}] # , {"backprop_method": "sft"}, {"backprop_method": "grpo"}
+params = [
+    {"backprop_method": "kto", "sample_strategy": "tree", "tree_depth": 13, "tree_degree": 2},
+    {"backprop_method": "sft", "sample_strategy": "iid", "group_size": 500},
+    {"backprop_method": "grpo", "sample_strategy": "iid", "group_size": 500},
+]
+
 all_experiments = []
 for task_id in task_ids:
     for learning_rate in learning_rates:
