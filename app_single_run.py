@@ -95,14 +95,44 @@ def extract_time_series(logs):
 
 st.title("Single Run Viewer")
 
-experiments = sorted([exp for exp in os.listdir("experiments") if os.path.isdir(f"experiments/{exp}")], reverse=True)
+all_experiments = sorted([exp for exp in os.listdir("experiments") if os.path.isdir(f"experiments/{exp}")], reverse=True)
 
-if len(experiments) == 0:
+if len(all_experiments) == 0:
     st.error("No experiments found in the experiments folder")
     st.stop()
 
+exp_metadata = []
+for exp in all_experiments:
+    data, error = load_run_data(exp)
+    if data is not None:
+        exp_type = get_experiment_type(data["args"])
+        task_id = data["args"].get("task_id", "N/A")
+        exp_metadata.append({"name": exp, "type": exp_type, "task_id": task_id})
+
+all_exp_types = sorted(set([meta["type"] for meta in exp_metadata]))
+all_task_ids = sorted(set([meta["task_id"] for meta in exp_metadata]))
+
+st.sidebar.header("Filters")
+selected_exp_type = st.sidebar.selectbox("Experiment Type", ["all"] + all_exp_types, index=0)
+
+if selected_exp_type == "all":
+    available_task_ids = all_task_ids
+else:
+    available_task_ids = sorted(set([meta["task_id"] for meta in exp_metadata if meta["type"] == selected_exp_type]))
+
+selected_task_id = st.sidebar.selectbox("Task ID", ["all"] + available_task_ids, index=0)
+
+filtered_experiments = []
+for meta in exp_metadata:
+    if (selected_exp_type == "all" or meta["type"] == selected_exp_type) and (selected_task_id == "all" or meta["task_id"] == selected_task_id):
+        filtered_experiments.append(meta["name"])
+
+if len(filtered_experiments) == 0:
+    st.sidebar.warning("No experiments match the selected filters")
+    st.stop()
+
 st.sidebar.header("Select Run")
-selected_exp = st.sidebar.selectbox("Experiment", experiments, index=0)
+selected_exp = st.sidebar.selectbox("Experiment", filtered_experiments, index=0)
 
 if selected_exp:
     run_data, error = load_run_data(selected_exp)
