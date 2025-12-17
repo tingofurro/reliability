@@ -133,53 +133,42 @@ if selected_exp:
         time_series = extract_time_series(logs)
         
         fig = make_subplots(
-            rows=5, cols=2,
+            rows=3, cols=2,
             subplot_titles=(
-                "Mean Train Score", "Mean Eval Score",
-                "Unique Answers", "Num Eval Responses",
-                "Uniqueness (%)", "Num Unique Correct Answers",
-                "Correct Log Probs", "Incorrect Log Probs",
+                "Train & Eval Scores", "Unique Answers",
+                "Uniqueness (%)", "Log Probs",
                 "Backprop Errors", ""
             ),
-            vertical_spacing=0.08,
+            vertical_spacing=0.12,
             horizontal_spacing=0.12
         )
         
         iterations = time_series["iterations"]
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["mean_train_score"], mode='lines+markers', name='Mean Train Score', line=dict(color='#1f77b4'), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["mean_train_score"], mode='lines+markers', name='Mean Train Score', line=dict(color='#1f77b4'), showlegend=True), row=1, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["mean_eval_score"], mode='lines+markers', name='Mean Eval Score', line=dict(color='#ff7f0e'), showlegend=True), row=1, col=1)
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["mean_eval_score"], mode='lines+markers', name='Mean Eval Score', line=dict(color='#ff7f0e'), showlegend=False), row=1, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["unique_answers"], mode='lines+markers', name='Unique Answers', line=dict(color='#2ca02c'), showlegend=True), row=1, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["num_unique_correct_answers"], mode='lines+markers', name='Unique Correct Answers', line=dict(color='#d62728'), showlegend=True), row=1, col=2)
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["unique_answers"], mode='lines+markers', name='Unique Answers', line=dict(color='#2ca02c'), showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["uniqueness"], mode='lines+markers', name='Uniqueness', line=dict(color='#9467bd'), showlegend=False), row=2, col=1)
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["num_eval_responses"], mode='lines+markers', name='Num Eval Responses', line=dict(color='#d62728'), showlegend=False), row=2, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["correct_logprobs"], mode='lines+markers', name='Correct Log Probs', line=dict(color='#e377c2'), showlegend=True), row=2, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["incorrect_logprobs"], mode='lines+markers', name='Incorrect Log Probs', line=dict(color='#7f7f7f'), showlegend=True), row=2, col=2)
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["uniqueness"], mode='lines+markers', name='Uniqueness', line=dict(color='#9467bd'), showlegend=False), row=3, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=time_series["backprop_errors"], mode='lines+markers', name='Backprop Errors', line=dict(color='#bcbd22'), fill='tozeroy', showlegend=False), row=3, col=1)
         
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["num_unique_correct_answers"], mode='lines+markers', name='Num Unique Correct', line=dict(color='#8c564b'), showlegend=False), row=3, col=2)
-        
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["correct_logprobs"], mode='lines+markers', name='Correct Log Probs', line=dict(color='#e377c2'), showlegend=False), row=4, col=1)
-        
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["incorrect_logprobs"], mode='lines+markers', name='Incorrect Log Probs', line=dict(color='#7f7f7f'), showlegend=False), row=4, col=2)
-        
-        fig.add_trace(go.Scatter(x=iterations, y=time_series["backprop_errors"], mode='lines+markers', name='Backprop Errors', line=dict(color='#bcbd22'), fill='tozeroy', showlegend=False), row=5, col=1)
-        
-        for i in range(1, 6):
+        for i in range(1, 4):
             for j in range(1, 3):
                 fig.update_xaxes(title_text="Iteration", row=i, col=j)
         
         fig.update_yaxes(title_text="Score", row=1, col=1)
-        fig.update_yaxes(title_text="Score", row=1, col=2)
-        fig.update_yaxes(title_text="Count", row=2, col=1)
-        fig.update_yaxes(title_text="Count", row=2, col=2)
-        fig.update_yaxes(title_text="Percentage", row=3, col=1)
-        fig.update_yaxes(title_text="Count", row=3, col=2)
-        fig.update_yaxes(title_text="Log Prob", row=4, col=1)
-        fig.update_yaxes(title_text="Log Prob", row=4, col=2)
-        fig.update_yaxes(title_text="Error (0/1)", row=5, col=1)
+        fig.update_yaxes(title_text="Count", row=1, col=2)
+        fig.update_yaxes(title_text="Percentage", row=2, col=1)
+        fig.update_yaxes(title_text="Log Prob", row=2, col=2)
+        fig.update_yaxes(title_text="Error (0/1)", row=3, col=1)
         
-        fig.update_layout(height=1600, hovermode='x unified')
+        fig.update_layout(height=1000, hovermode='x unified')
         
         st.plotly_chart(fig, use_container_width=True)
         

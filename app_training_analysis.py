@@ -35,6 +35,9 @@ def load_experiment_data():
         
         learning_rate = exp_args["learning_rate"]
         experiment_type = get_experiment_type(exp_args)
+
+        git_version = exp_args.get("git_version", None)
+
         sample_strategy = exp_args.get("sample_strategy", None)
         tree_degree = exp_args.get("tree_degree", None)
         tree_depth = exp_args.get("tree_depth", None)
