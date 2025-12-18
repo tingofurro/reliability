@@ -216,6 +216,11 @@ while True:
     response_logprobs = [response["logprobs"] for response in evaluation_responses]
     correct_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] == 1]
     incorrect_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] != 1]
+    correct_resp_length = [len(response["response_text"]) for response in evaluation_responses if response["score"] == 1]
+    incorrect_resp_length = [len(response["response_text"]) for response in evaluation_responses if response["score"] != 1]
+
+    mean_correct_resp_length = np.mean(correct_resp_length)
+    mean_incorrect_resp_length = np.mean(incorrect_resp_length)
     # print("RESPONSE LOGPROBS:")
     # print(response_logprobs)
 
@@ -236,6 +241,8 @@ while True:
     
     print(f"\n[Train] Starting backprop with {len(training_responses)} responses")
     backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=training_responses, args_dict=backprop_args, timeout=1800)
+
+    backprop_results_stats = backprop_results.get("stats", {})
     
     backprop_error = None
     backprop_error_type = None
@@ -258,7 +265,9 @@ while True:
         print(f"[Train] No backprop updates applied")
     
 
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type}
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "mean_correct_resp_length": mean_correct_resp_length, "mean_incorrect_resp_length": mean_incorrect_resp_length, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type}
+    log_entry.update(backprop_results_stats)
+
     with open(logs_path, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
 

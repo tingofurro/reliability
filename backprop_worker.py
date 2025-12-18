@@ -70,7 +70,7 @@ def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict
         # Clear tensors to save memory
         del batch_logprobs, batch_loss, batch_advantages
 
-    return {"success": True}
+    return {"success": True, "stats": {"grpo_num_responses": num_responses}}
 
 
 def calculate_gradients_kto(assistant_model, conversation, responses, args_dict):
@@ -130,7 +130,8 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     print(f"[Backprop Worker] Completed all backward passes.")
-    return {"success": True}
+    stats = {"kto_num_total_ops": len(backprop_ops), "kto_num_selected_ops": len(selected_ops), "kto_num_grouped_ops": len(grouped_node_ids)}
+    return {"success": True, "stats": stats}
 
 def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
@@ -189,7 +190,7 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
         del batch_logprobs, batch_loss
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    return {"success": True}
+    return {"success": True, "stats": {"sft_num_responses": num_responses}}
 
 def backprop_worker_process(model_path, save_path, conversation, responses, args_dict, result_queue, error_queue):
     setproctitle.setproctitle("backprop_worker")
@@ -241,7 +242,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             raise ValueError(f"Unknown backprop method: {backprop_method}")
         
         if grad_return is None:
-            result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses)})
+            result_queue.put({"any_updates": False, "losses": [], "timings": timings, "num_responses": len(responses), "stats": grad_return.get("stats", {})})
             return None
 
         # Single optimizer step after all gradient accumulation
@@ -262,7 +263,7 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             timings["model_save"] = T_model_save_end - T_backprop_end
         
         # Prepare results
-        results = {"any_updates": any_updates, "losses": losses, "timings": timings, "num_responses": len(responses)}
+        results = {"any_updates": any_updates, "losses": losses, "timings": timings, "num_responses": len(responses), "stats": grad_return.get("stats", {})}
         
         # Send results back
         result_queue.put(results)
