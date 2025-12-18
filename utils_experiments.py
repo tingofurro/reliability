@@ -1,3 +1,4 @@
+from bson.objectid import ObjectId
 from datetime import datetime
 import os, sys, shutil
 import subprocess
@@ -11,7 +12,7 @@ def make_exp_folder(prefix="exp", suffix=None):
 
     exp_taken, run_idx = True, 1
     while exp_taken:
-        exp_id = f"{prefix}{datetime.now().strftime('%m%d')}_{server_name}"
+        exp_id = f"{prefix}{datetime.now().strftime('%m%d')}_{server_name}_{str(ObjectId())}"
         if suffix:
             exp_id += f"_{suffix}"
 
