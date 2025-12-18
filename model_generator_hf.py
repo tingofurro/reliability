@@ -167,13 +167,19 @@ class GenerationModel:
         with torch.no_grad():
             input_outputs = self.model(input_ids, return_dict=True)
         
-        prefix_tokens_tensor = torch.tensor([prefix_tokens]).to(self.device)
-        with torch.set_grad_enabled(use_grad):
-            prefix_outputs = self.model(prefix_tokens_tensor, past_key_values=input_outputs.past_key_values, return_dict=True)
+        if len(prefix_tokens) == 0:
+            logits = input_outputs.logits
+            logprobs = torch.log_softmax(logits, dim=-1)
+            return logprobs
 
-        logits = prefix_outputs.logits
-        logprobs = torch.log_softmax(logits, dim=-1)
-        return logprobs
+        else:
+            prefix_tokens_tensor = torch.tensor([prefix_tokens]).to(self.device)
+            with torch.set_grad_enabled(use_grad):
+                prefix_outputs = self.model(prefix_tokens_tensor, past_key_values=input_outputs.past_key_values, return_dict=True)
+
+            logits = prefix_outputs.logits
+            logprobs = torch.log_softmax(logits, dim=-1)
+            return logprobs
 
 
     # def get_branch_logprobs(self, conversation, prefix_tokens, branch_token_ids, use_grad=True):
