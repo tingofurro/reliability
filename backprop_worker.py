@@ -133,7 +133,7 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
     stats = {"kto_num_total_ops": len(backprop_ops), "kto_num_selected_ops": len(selected_ops), "kto_num_grouped_ops": len(grouped_node_ids)}
     return {"success": True, "stats": stats}
 
-def calculate_gradients_sft(assistant_model, conversation, responses, args_dict):
+def calculate_gradients_rej(assistant_model, conversation, responses, args_dict):
     reduction = args_dict.get("reduction", "sum")
     batch_size = args_dict.get("batch_size", 32)
     
@@ -142,7 +142,7 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
     print(f"[Backprop Worker] Found {len(correct_responses)} responses with score=1 out of {len(responses)} total")
     
     if len(correct_responses) == 0:
-        print_colored("[Backprop Worker] No responses with score=1, skipping SFT", "yellow")
+        print_colored("[Backprop Worker] No responses with score=1, skipping REJ", "yellow")
         return None
     
     # Deduplicate responses by text content
@@ -155,10 +155,10 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
             unique_responses.append(response)
     
     num_responses = len(unique_responses)
-    print(f"[Backprop Worker] Using {num_responses} unique correct responses for SFT")
+    print(f"[Backprop Worker] Using {num_responses} unique correct responses for REJ")
     
     if num_responses == 0:
-        print_colored("[Backprop Worker] No unique correct responses, skipping SFT", "yellow")
+        print_colored("[Backprop Worker] No unique correct responses, skipping REJ", "yellow")
         return None
     
     # Calculate number of gradient accumulation steps based on fixed batch size
@@ -190,7 +190,7 @@ def calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
         del batch_logprobs, batch_loss
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    return {"success": True, "stats": {"sft_num_responses": num_responses}}
+    return {"success": True, "stats": {"rej_num_responses": num_responses}}
 
 def backprop_worker_process(model_path, save_path, conversation, responses, args_dict, result_queue, error_queue):
     setproctitle.setproctitle("backprop_worker")
@@ -236,8 +236,8 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
             grad_return = calculate_gradients_grpo(assistant_model, conversation, responses, args_dict)
         elif backprop_method == "kto":
             grad_return = calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
-        elif backprop_method == "sft":
-            grad_return = calculate_gradients_sft(assistant_model, conversation, responses, args_dict)
+        elif backprop_method == "rej":
+            grad_return = calculate_gradients_rej(assistant_model, conversation, responses, args_dict)
         else:
             raise ValueError(f"Unknown backprop method: {backprop_method}")
         

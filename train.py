@@ -32,7 +32,7 @@ parser.add_argument("--num_eval_runs", type=int, default=500)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
-parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto", "sft"])
+parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto", "rej"])
 parser.add_argument("--kto_margin", type=float, default=3.0)
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
