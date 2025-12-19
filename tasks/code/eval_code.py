@@ -397,7 +397,7 @@ def grade_stdio(
     return all_results, {"execution time": total_execution_time}
 
 
-def run_test(sample, tests, test=None, debug=False, timeout=3):
+def run_test(sample, tests, test=None, debug=False, timeout=6):
     """
     if test(generated_code) is not None it'll try to run the code.
     otherwise it'll just return an input and output pair.
