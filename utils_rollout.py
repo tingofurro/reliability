@@ -46,11 +46,11 @@ def generate_responses(assistant_gen_client, eval_client, sample, conversation, 
                 if job_result["status"] == "completed" and "evaluation_return" in job_result.get("result", {}):
                     completed_eval_jobs.append(job_id)
                     response = eval_job_id2response[job_id]
-                    response["score_og"] = job_result["result"]["evaluation_return"]["score"]
+                    response["score"] = job_result["result"]["evaluation_return"]["score"]
                 elif job_result["status"] == "error" or (job_result["status"] == "completed" and "evaluation_return" not in job_result.get("result", {})):
                     completed_eval_jobs.append(job_id)
                     response = eval_job_id2response[job_id]
-                    response["score_og"] = 0
+                    response["score"] = 0
             
             # Remove completed evaluation jobs
             for job_id in completed_eval_jobs:

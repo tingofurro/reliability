@@ -28,7 +28,7 @@ parser.add_argument("--group_size", type=int, default=100)
 parser.add_argument("--tree_degree", type=int, default=2)
 parser.add_argument("--tree_depth", type=int, default=13)
 
-parser.add_argument("--num_eval_runs", type=int, default=500)
+parser.add_argument("--num_eval_runs", type=int, default=100)
 parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
