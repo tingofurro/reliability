@@ -4,7 +4,7 @@ from model_generator_hf import GenerationModel
 from utils import TeeOutput, print_colored
 
 def calculate_gradients_grpo(assistant_model, conversation, responses, args_dict):
-    reduction = args_dict.get("reduction", "sum")
+    reduction = args_dict.get("reduction", "mean")
     advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
     batch_size = args_dict.get("batch_size", 16)
 
@@ -134,7 +134,7 @@ def calculate_gradients_kto(assistant_model, conversation, responses, args_dict)
     return {"success": True, "stats": stats}
 
 def calculate_gradients_rej(assistant_model, conversation, responses, args_dict):
-    reduction = args_dict.get("reduction", "sum")
+    reduction = args_dict.get("reduction", "mean")
     batch_size = args_dict.get("batch_size", 32)
     
     # Filter responses with score of 1
@@ -200,9 +200,6 @@ def backprop_worker_process(model_path, save_path, conversation, responses, args
     timings = {"model_load": 0, "backprop": 0, "model_save": 0}
     
     backprop_method = args_dict.get("backprop_method", "grpo")
-    reduction = args_dict.get("reduction", "sum")
-    advantage_estimation = args_dict.get("advantage_estimation", "zero_mean")
-    batch_size = args_dict.get("batch_size", 16)
 
     # Load model and optimizer
     T_model_load_start = time.time()
