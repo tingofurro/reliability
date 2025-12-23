@@ -6,9 +6,15 @@ learning_rates = [5e-3]
 
 params = [
     # {"backprop_method": "kto", "sample_strategy": "tree", "tree_depth": 13, "tree_degree": 2},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 500},
-    {"backprop_method": "grpo", "sample_strategy": "iid", "group_size": 500},
-    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 500},
+    # {"backprop_method": "grpo", "sample_strategy": "iid", "group_size": 500},
+    # {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 500},
+
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 16},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 32},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 64},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 256},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 512},
 ]
 
 all_experiments = []

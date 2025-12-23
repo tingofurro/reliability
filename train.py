@@ -97,18 +97,26 @@ CURRENT_LATEST_MODEL_PATH = args.base_model
 iteration = 0
 
 while True:
+    iteration_start_time = time.time()
+    
     # Step 1: Forward
     # Step 1a: Load the model on vllm backend
+    load_start_time = time.time()
     load_result = assistant_gen_client.load_model(CURRENT_LATEST_MODEL_PATH, num_gpus=args.num_gpus) # Be careful, this shouldn't be commented by default
+    load_time = time.time() - load_start_time
     # print(f"Model load result: {load_result}")
 
     # Step 1b: Generate responses
     print(">> Starting evaluation and training phases in parallel")
+    training_start_time = time.time()
+    evaluation_start_time = time.time()
     with ThreadPoolExecutor(max_workers=2) as executor:
         training_future = executor.submit(run_training_phase, conversation, args.sample_strategy, args.group_size, args.tree_depth, args.tree_degree)
         evaluation_future = executor.submit(run_evaluation_phase, conversation, args.num_eval_runs)
         training_responses = training_future.result()
+        training_time = time.time() - training_start_time
         evaluation_responses = evaluation_future.result()
+        evaluation_time = time.time() - evaluation_start_time
 
     # responses = evaluation_responses + training_responses
 
@@ -140,7 +148,9 @@ while True:
     print_colored(f"Mean eval score: {mean_eval_score} (Uniqueness: {len(unique_answers) / len(evaluation_responses)} ({uniqueness:.2f}))", "green")
 
     # Step 1c: Unload the model
+    unload_start_time = time.time()
     unload_result = assistant_gen_client.unload_model()
+    unload_time = time.time() - unload_start_time
     # print(f"Model unload result: {unload_result}")
 
     # Step 2: Backprop
@@ -149,7 +159,9 @@ while True:
     backprop_args = {"backprop_method": args.backprop_method, "learning_rate": args.learning_rate, "advantage_estimation": args.advantage_estimation, "batch_size": args.batch_size, "reduction": "sum", "kto_margin": args.kto_margin}
     
     print(f"\n[Train] Starting backprop with {len(training_responses)} responses")
+    backprop_start_time = time.time()
     backprop_results = backprop_worker.run_backprop(model_path=CURRENT_LATEST_MODEL_PATH, save_path=MODEL_PATH, conversation=conversation, responses=training_responses, args_dict=backprop_args, timeout=1800)
+    backprop_time = time.time() - backprop_start_time
 
     backprop_results_stats = backprop_results.get("stats", {})
     
@@ -174,7 +186,9 @@ while True:
         print(f"[Train] No backprop updates applied")
     
 
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "mean_correct_resp_length": mean_correct_resp_length, "mean_incorrect_resp_length": mean_incorrect_resp_length, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type}
+    total_iteration_time = time.time() - iteration_start_time
+    
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "mean_correct_resp_length": mean_correct_resp_length, "mean_incorrect_resp_length": mean_incorrect_resp_length, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type, "timings/load_genserv": load_time, "timings/training_phase": training_time, "timings/evaluation_phase": evaluation_time, "timings/unload_genserv": unload_time, "timings/backprop": backprop_time, "timings/total_iteration": total_iteration_time}
     log_entry.update(backprop_results_stats)
 
     with open(logs_path, "a") as f:
