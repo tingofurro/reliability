@@ -11,6 +11,12 @@ st.set_page_config(page_title="Training Analysis", layout="wide")
 
 SAVED_FILTERS_FILE = "saved_filters.json"
 
+def shorten_task_id(task_id):
+    if task_id == "all":
+        return "all"
+    shortened = task_id.replace("sharded-", "").replace("livecodebench", "lcb")
+    return shortened
+
 def load_saved_filters():
     if os.path.exists(SAVED_FILTERS_FILE):
         with open(SAVED_FILTERS_FILE, "r") as f:
@@ -21,16 +27,16 @@ def save_filters_to_file(filters_dict):
     with open(SAVED_FILTERS_FILE, "w") as f:
         json.dump(filters_dict, f, indent=2)
 
-def load_experiment_data():
-    experiments = sorted([exp for exp in os.listdir("experiments")])
+def load_experiment_data(experiments_folder):
+    experiments = sorted([exp for exp in os.listdir(experiments_folder)])
     necessary_files = ["args.json", "logs.jsonl", "unique_answers.jsonl"]
     
     exp_results = []
     for exp in experiments:
-        if any(not os.path.exists(f"experiments/{exp}/{f}") for f in necessary_files):
+        if any(not os.path.exists(f"{experiments_folder}/{exp}/{f}") for f in necessary_files):
             continue
         
-        with open(f"experiments/{exp}/args.json", "r") as f:
+        with open(f"{experiments_folder}/{exp}/args.json", "r") as f:
             exp_args = json.load(f)
         
         learning_rate = exp_args["learning_rate"]
@@ -44,13 +50,13 @@ def load_experiment_data():
         group_size = exp_args.get("group_size", None)
         
         exp_logs = []
-        with open(f"experiments/{exp}/logs.jsonl", "r") as f:
+        with open(f"{experiments_folder}/{exp}/logs.jsonl", "r") as f:
             for line in f:
                 exp_logs.append(json.loads(line))
         
         task_id = exp_args["task_id"]
         
-        with open(f"experiments/{exp}/unique_answers.jsonl", "r") as f:
+        with open(f"{experiments_folder}/{exp}/unique_answers.jsonl", "r") as f:
             unique_answers = [json.loads(line) for line in f]
         
         already_seen_answers = set()
@@ -64,9 +70,12 @@ def load_experiment_data():
         mean_eval_score = [log["mean_eval_score"] for log in exp_logs]
         uniqueness = [log["uniqueness"]/100.0 for log in exp_logs]
         
-        correct_logprobs = [np.mean(log["correct_logprobs"]) for log in exp_logs]
-        incorrect_logprobs = [np.mean(log["incorrect_logprobs"]) for log in exp_logs]
+        correct_logprobs = [np.mean(log["correct_logprobs"]) if len(log["correct_logprobs"]) > 0 else np.nan for log in exp_logs]
+        incorrect_logprobs = [np.mean(log["incorrect_logprobs"]) if len(log["incorrect_logprobs"]) > 0 else np.nan for log in exp_logs]
         num_unique_correct_answers = [log["num_unique_correct_answers"] for log in exp_logs]
+        
+        mean_correct_resp_length = [log.get("mean_correct_resp_length", np.nan) for log in exp_logs]
+        mean_incorrect_resp_length = [log.get("mean_incorrect_resp_length", np.nan) for log in exp_logs]
         
         is_success = mean_eval_score[-1] >= 0.99
         
@@ -84,15 +93,27 @@ def load_experiment_data():
             "sample_strategy": sample_strategy,
             "tree_degree": tree_degree,
             "tree_depth": tree_depth,
-            "group_size": group_size
+            "group_size": group_size,
+            "mean_correct_resp_length": mean_correct_resp_length,
+            "mean_incorrect_resp_length": mean_incorrect_resp_length
         })
     
     return exp_results
 
+# Find all experiment folders
+available_folders = sorted([f for f in os.listdir(".") if f.startswith("experiments") and os.path.isdir(f)])
+if not available_folders:
+    st.error("No experiment folders found")
+    st.stop()
+
+# Sidebar: Experiments folder selector
+default_index = available_folders.index("experiments") if "experiments" in available_folders else 0
+selected_folder = st.sidebar.selectbox("Experiments Folder", available_folders, index=default_index)
+
 # Load data
 try:
-    exp_results = load_experiment_data()
-    st.sidebar.success(f"Loaded {len(exp_results)} experiments")
+    exp_results = load_experiment_data(selected_folder)
+    st.sidebar.success(f"Loaded {len(exp_results)} experiments from '{selected_folder}'")
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.stop()
@@ -113,8 +134,13 @@ if "filter_to_load" not in st.session_state:
     st.session_state.filter_to_load = None
 
 # Sidebar controls
+st.sidebar.divider()
 st.sidebar.header("Filters")
-selected_task_id = st.sidebar.selectbox("Task ID", ["all"] + task_ids, index=0)
+task_id_display = ["all"] + [shorten_task_id(tid) for tid in task_ids]
+task_id_mapping = {shorten_task_id(tid): tid for tid in task_ids}
+task_id_mapping["all"] = "all"
+selected_display = st.sidebar.selectbox("Task ID", task_id_display, index=0)
+selected_task_id = task_id_mapping[selected_display]
 max_iter = st.sidebar.slider("Max Iterations", min_value=5, max_value=50, value=25)
 
 st.sidebar.subheader("Run Filter (JSON)")
@@ -183,7 +209,7 @@ def matches_filter(exp_result, filter_dict):
 
 # Title
 st.title("Training Analysis Dashboard")
-filter_info = f"**Task:** {selected_task_id}"
+filter_info = f"**Task:** {shorten_task_id(selected_task_id)}"
 if run_filter:
     filter_info += f" | **Run Filter:** {json.dumps(run_filter)}"
 st.markdown(filter_info)
@@ -192,12 +218,14 @@ st.markdown(filter_info)
 def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dict):
     all_mean_eval_scores, all_uniquenesses, all_num_correct_answers = {}, {}, {}
     all_correct_logprobs, all_incorrect_logprobs = {}, {}
+    all_correct_resp_length, all_incorrect_resp_length = {}, {}
     run_counts = {}
     
     for experiment_type in experiment_types:
         all_mean_eval_scores[experiment_type], all_uniquenesses[experiment_type] = [], []
         all_num_correct_answers[experiment_type] = []
         all_correct_logprobs[experiment_type], all_incorrect_logprobs[experiment_type] = [], []
+        all_correct_resp_length[experiment_type], all_incorrect_resp_length[experiment_type] = [], []
         this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["experiment_type"] == experiment_type]
         
         # Apply run filter
@@ -229,19 +257,29 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
             if len(incorrect_logprobs) < max_iterations:
                 incorrect_logprobs += [incorrect_logprobs[-1]] * (max_iterations - len(incorrect_logprobs))
             
+            correct_resp_length = res["mean_correct_resp_length"][:max_iterations]
+            if len(correct_resp_length) < max_iterations:
+                correct_resp_length += [correct_resp_length[-1]] * (max_iterations - len(correct_resp_length))
+            
+            incorrect_resp_length = res["mean_incorrect_resp_length"][:max_iterations]
+            if len(incorrect_resp_length) < max_iterations:
+                incorrect_resp_length += [incorrect_resp_length[-1]] * (max_iterations - len(incorrect_resp_length))
+            
             all_mean_eval_scores[experiment_type].append(mean_eval_score)
             all_uniquenesses[experiment_type].append(uniqueness)
             all_num_correct_answers[experiment_type].append(num_correct_answers)
             all_correct_logprobs[experiment_type].append(correct_logprobs)
             all_incorrect_logprobs[experiment_type].append(incorrect_logprobs)
+            all_correct_resp_length[experiment_type].append(correct_resp_length)
+            all_incorrect_resp_length[experiment_type].append(incorrect_resp_length)
     
-    return all_mean_eval_scores, all_uniquenesses, all_num_correct_answers, all_correct_logprobs, all_incorrect_logprobs, run_counts
+    return all_mean_eval_scores, all_uniquenesses, all_num_correct_answers, all_correct_logprobs, all_incorrect_logprobs, all_correct_resp_length, all_incorrect_resp_length, run_counts
 
 # Process data for all runs
 all_data = process_data_for_plots(selected_task_id, False, max_iter, run_filter)
 
-# Create 2x3 subplot
-fig = make_subplots(rows=2, cols=3, subplot_titles=("Mean Eval Scores", "Uniqueness", "Num Unique Correct Answers", "Correct Logprobs", "Incorrect Logprobs", ""), vertical_spacing=0.15, horizontal_spacing=0.08)
+# Create 3x3 subplot
+fig = make_subplots(rows=3, cols=3, subplot_titles=("Mean Eval Scores", "Uniqueness", "Num Unique Correct Answers", "Correct Logprobs", "Incorrect Logprobs", "Correct Resp Length", "Incorrect Resp Length", "", ""), vertical_spacing=0.12, horizontal_spacing=0.08)
 
 # Colors for experiment types
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
@@ -249,58 +287,75 @@ colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e3
 # Plot Mean Eval Scores (row 1, col 1)
 for idx, experiment_type in enumerate(experiment_types):
     if len(all_data[0][experiment_type]) > 0:
-        mean_scores = np.mean(all_data[0][experiment_type], axis=0)
+        mean_scores = np.nanmean(all_data[0][experiment_type], axis=0)
         iterations = list(range(len(mean_scores)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=True, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[5][experiment_type]}<extra></extra>'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=True, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=1)
 
 # Plot Uniqueness (row 1, col 2)
 for idx, experiment_type in enumerate(experiment_types):
     if len(all_data[1][experiment_type]) > 0:
-        mean_uniqueness = np.mean(all_data[1][experiment_type], axis=0)
+        mean_uniqueness = np.nanmean(all_data[1][experiment_type], axis=0)
         iterations = list(range(len(mean_uniqueness)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[5][experiment_type]}<extra></extra>'), row=1, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=2)
 
 # Plot Num Unique Correct Answers (row 1, col 3)
 for idx, experiment_type in enumerate(experiment_types):
     if len(all_data[2][experiment_type]) > 0:
-        mean_num_correct = np.mean(all_data[2][experiment_type], axis=0)
+        mean_num_correct = np.nanmean(all_data[2][experiment_type], axis=0)
         iterations = list(range(len(mean_num_correct)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[5][experiment_type]}<extra></extra>'), row=1, col=3)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=3)
 
 # Plot Correct Logprobs (row 2, col 1)
 for idx, experiment_type in enumerate(experiment_types):
     if len(all_data[3][experiment_type]) > 0:
-        mean_correct_logprobs = np.mean(all_data[3][experiment_type], axis=0)
+        mean_correct_logprobs = np.nanmean(all_data[3][experiment_type], axis=0)
         iterations = list(range(len(mean_correct_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[5][experiment_type]}<extra></extra>'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=1)
 
 # Plot Incorrect Logprobs (row 2, col 2)
 for idx, experiment_type in enumerate(experiment_types):
     if len(all_data[4][experiment_type]) > 0:
-        mean_incorrect_logprobs = np.mean(all_data[4][experiment_type], axis=0)
+        mean_incorrect_logprobs = np.nanmean(all_data[4][experiment_type], axis=0)
         iterations = list(range(len(mean_incorrect_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[5][experiment_type]}<extra></extra>'), row=2, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=2)
+
+# Plot Correct Resp Length (row 2, col 3)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(all_data[5][experiment_type]) > 0:
+        mean_correct_resp_length = np.nanmean(all_data[5][experiment_type], axis=0)
+        iterations = list(range(len(mean_correct_resp_length)))
+        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=3)
+
+# Plot Incorrect Resp Length (row 3, col 1)
+for idx, experiment_type in enumerate(experiment_types):
+    if len(all_data[6][experiment_type]) > 0:
+        mean_incorrect_resp_length = np.nanmean(all_data[6][experiment_type], axis=0)
+        iterations = list(range(len(mean_incorrect_resp_length)))
+        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=3, col=1)
 
 # Update axes labels
 for col in range(1, 4):
     fig.update_xaxes(title_text="Iteration", row=1, col=col)
     fig.update_xaxes(title_text="Iteration", row=2, col=col)
+    fig.update_xaxes(title_text="Iteration", row=3, col=col)
 
 fig.update_yaxes(title_text="Mean Eval Score", range=[0, 1], row=1, col=1)
 fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=1, col=2)
 fig.update_yaxes(title_text="Count", row=1, col=3)
 fig.update_yaxes(title_text="Log Prob", row=2, col=1)
 fig.update_yaxes(title_text="Log Prob", row=2, col=2)
+fig.update_yaxes(title_text="Length", row=2, col=3)
+fig.update_yaxes(title_text="Length", row=3, col=1)
 
 # Update layout
-fig.update_layout(height=700, hovermode='closest', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
+fig.update_layout(height=900, hovermode='closest', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
 
 st.plotly_chart(fig, use_container_width=True)
 
 # Display run counts
 st.subheader("Run Counts")
 for experiment_type in experiment_types:
-    count = all_data[5][experiment_type]
+    count = all_data[7][experiment_type]
     st.markdown(f"- {experiment_type}: **{count}** runs")
 
 # Summary statistics

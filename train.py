@@ -133,8 +133,8 @@ while True:
     response_logprobs = [response["logprobs"] for response in evaluation_responses]
     correct_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] == 1]
     incorrect_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] != 1]
-    correct_resp_length = [len(response["response_text"]) for response in evaluation_responses if response["score"] == 1]
-    incorrect_resp_length = [len(response["response_text"]) for response in evaluation_responses if response["score"] != 1]
+    correct_resp_length = [len(response["response_tokens"]) for response in evaluation_responses if response["score"] == 1]
+    incorrect_resp_length = [len(response["response_tokens"]) for response in evaluation_responses if response["score"] != 1]
 
     mean_correct_resp_length = np.mean(correct_resp_length)
     mean_incorrect_resp_length = np.mean(incorrect_resp_length)
