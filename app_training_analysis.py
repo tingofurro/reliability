@@ -11,6 +11,18 @@ st.set_page_config(page_title="Training Analysis", layout="wide")
 
 SAVED_FILTERS_FILE = "saved_filters.json"
 
+def load_experiment_args(experiments_folder):
+    args_file = os.path.join(experiments_folder, "experiment_args.json")
+    if os.path.exists(args_file):
+        with open(args_file, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_experiment_args(experiments_folder, args_dict):
+    args_file = os.path.join(experiments_folder, "experiment_args.json")
+    with open(args_file, "w") as f:
+        json.dump(args_dict, f, indent=2)
+
 def shorten_task_id(task_id):
     if task_id == "all":
         return "all"
@@ -27,7 +39,7 @@ def save_filters_to_file(filters_dict):
     with open(SAVED_FILTERS_FILE, "w") as f:
         json.dump(filters_dict, f, indent=2)
 
-def load_experiment_data(experiments_folder):
+def load_experiment_data(experiments_folder, breakdown_key="experiment_type"):
     experiments = sorted([exp for exp in os.listdir(experiments_folder)])
     necessary_files = ["args.json", "logs.jsonl", "unique_answers.jsonl"]
     
@@ -79,12 +91,23 @@ def load_experiment_data(experiments_folder):
         
         is_success = mean_eval_score[-1] >= 0.99
         
+        # Get breakdown value based on breakdown_key
+        if breakdown_key == "experiment_type":
+            breakdown_value = experiment_type
+        else:
+            breakdown_value = exp_args.get(breakdown_key, f"unknown_{breakdown_key}")
+            if breakdown_value is None:
+                breakdown_value = f"none_{breakdown_key}"
+            else:
+                breakdown_value = str(breakdown_value)
+        
         exp_results.append({
             "task_id": task_id,
             "mean_eval_score": mean_eval_score,
             "uniqueness": uniqueness,
             "learning_rate": learning_rate,
             "experiment_type": experiment_type,
+            "breakdown_value": breakdown_value,
             "correct_logprobs": correct_logprobs,
             "incorrect_logprobs": incorrect_logprobs,
             "num_unique_correct_answers": num_unique_correct_answers,
@@ -110,17 +133,32 @@ if not available_folders:
 default_index = available_folders.index("experiments") if "experiments" in available_folders else 0
 selected_folder = st.sidebar.selectbox("Experiments Folder", available_folders, index=default_index)
 
+# Load experiment args for this folder
+experiment_args = load_experiment_args(selected_folder)
+current_breakdown_key = experiment_args.get("breakdown_key", "experiment_type")
+
+# Breakdown key selector
+st.sidebar.subheader("Breakdown Settings")
+new_breakdown_key = st.sidebar.text_input("Breakdown Key", value=current_breakdown_key, help="The key to group experiments by (default: experiment_type). Examples: learning_rate, tree_degree, sample_strategy")
+
+# Save breakdown key if changed
+if new_breakdown_key != current_breakdown_key:
+    experiment_args["breakdown_key"] = new_breakdown_key
+    save_experiment_args(selected_folder, experiment_args)
+    st.sidebar.success(f"Saved breakdown key: {new_breakdown_key}")
+    current_breakdown_key = new_breakdown_key
+
 # Load data
 try:
-    exp_results = load_experiment_data(selected_folder)
+    exp_results = load_experiment_data(selected_folder, current_breakdown_key)
     st.sidebar.success(f"Loaded {len(exp_results)} experiments from '{selected_folder}'")
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.stop()
 
-# Get unique task_ids and experiment_types
+# Get unique task_ids and breakdown values
 task_ids = sorted(list(set([res["task_id"] for res in exp_results])))
-experiment_types = sorted(list(set([res["experiment_type"] for res in exp_results])))
+breakdown_values = sorted(list(set([res["breakdown_value"] for res in exp_results])))
 
 # Get unique tree parameters
 tree_degrees = sorted(list(set([res["tree_degree"] for res in exp_results if res["tree_degree"] is not None])))
@@ -221,12 +259,12 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
     all_correct_resp_length, all_incorrect_resp_length = {}, {}
     run_counts = {}
     
-    for experiment_type in experiment_types:
-        all_mean_eval_scores[experiment_type], all_uniquenesses[experiment_type] = [], []
-        all_num_correct_answers[experiment_type] = []
-        all_correct_logprobs[experiment_type], all_incorrect_logprobs[experiment_type] = [], []
-        all_correct_resp_length[experiment_type], all_incorrect_resp_length[experiment_type] = [], []
-        this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["experiment_type"] == experiment_type]
+    for breakdown_value in breakdown_values:
+        all_mean_eval_scores[breakdown_value], all_uniquenesses[breakdown_value] = [], []
+        all_num_correct_answers[breakdown_value] = []
+        all_correct_logprobs[breakdown_value], all_incorrect_logprobs[breakdown_value] = [], []
+        all_correct_resp_length[breakdown_value], all_incorrect_resp_length[breakdown_value] = [], []
+        this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["breakdown_value"] == breakdown_value]
         
         # Apply run filter
         this_results = [res for res in this_results if matches_filter(res, run_filter_dict)]
@@ -234,7 +272,7 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
         if success_only:
             this_results = [res for res in this_results if res["is_success"]]
         
-        run_counts[experiment_type] = len(this_results)
+        run_counts[breakdown_value] = len(this_results)
         
         for res in this_results:
             mean_eval_score = res["mean_eval_score"][:max_iterations]
@@ -265,13 +303,13 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
             if len(incorrect_resp_length) < max_iterations:
                 incorrect_resp_length += [incorrect_resp_length[-1]] * (max_iterations - len(incorrect_resp_length))
             
-            all_mean_eval_scores[experiment_type].append(mean_eval_score)
-            all_uniquenesses[experiment_type].append(uniqueness)
-            all_num_correct_answers[experiment_type].append(num_correct_answers)
-            all_correct_logprobs[experiment_type].append(correct_logprobs)
-            all_incorrect_logprobs[experiment_type].append(incorrect_logprobs)
-            all_correct_resp_length[experiment_type].append(correct_resp_length)
-            all_incorrect_resp_length[experiment_type].append(incorrect_resp_length)
+            all_mean_eval_scores[breakdown_value].append(mean_eval_score)
+            all_uniquenesses[breakdown_value].append(uniqueness)
+            all_num_correct_answers[breakdown_value].append(num_correct_answers)
+            all_correct_logprobs[breakdown_value].append(correct_logprobs)
+            all_incorrect_logprobs[breakdown_value].append(incorrect_logprobs)
+            all_correct_resp_length[breakdown_value].append(correct_resp_length)
+            all_incorrect_resp_length[breakdown_value].append(incorrect_resp_length)
     
     return all_mean_eval_scores, all_uniquenesses, all_num_correct_answers, all_correct_logprobs, all_incorrect_logprobs, all_correct_resp_length, all_incorrect_resp_length, run_counts
 
@@ -285,53 +323,53 @@ fig = make_subplots(rows=3, cols=3, subplot_titles=("Mean Eval Scores", "Uniquen
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
 # Plot Mean Eval Scores (row 1, col 1)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[0][experiment_type]) > 0:
-        mean_scores = np.nanmean(all_data[0][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[0][breakdown_value]) > 0:
+        mean_scores = np.nanmean(all_data[0][breakdown_value], axis=0)
         iterations = list(range(len(mean_scores)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=True, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=True, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=1, col=1)
 
 # Plot Uniqueness (row 1, col 2)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[1][experiment_type]) > 0:
-        mean_uniqueness = np.nanmean(all_data[1][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[1][breakdown_value]) > 0:
+        mean_uniqueness = np.nanmean(all_data[1][breakdown_value], axis=0)
         iterations = list(range(len(mean_uniqueness)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=1, col=2)
 
 # Plot Num Unique Correct Answers (row 1, col 3)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[2][experiment_type]) > 0:
-        mean_num_correct = np.nanmean(all_data[2][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[2][breakdown_value]) > 0:
+        mean_num_correct = np.nanmean(all_data[2][breakdown_value], axis=0)
         iterations = list(range(len(mean_num_correct)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=1, col=3)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=1, col=3)
 
 # Plot Correct Logprobs (row 2, col 1)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[3][experiment_type]) > 0:
-        mean_correct_logprobs = np.nanmean(all_data[3][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[3][breakdown_value]) > 0:
+        mean_correct_logprobs = np.nanmean(all_data[3][breakdown_value], axis=0)
         iterations = list(range(len(mean_correct_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=2, col=1)
 
 # Plot Incorrect Logprobs (row 2, col 2)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[4][experiment_type]) > 0:
-        mean_incorrect_logprobs = np.nanmean(all_data[4][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[4][breakdown_value]) > 0:
+        mean_incorrect_logprobs = np.nanmean(all_data[4][breakdown_value], axis=0)
         iterations = list(range(len(mean_incorrect_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=2)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=2, col=2)
 
 # Plot Correct Resp Length (row 2, col 3)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[5][experiment_type]) > 0:
-        mean_correct_resp_length = np.nanmean(all_data[5][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[5][breakdown_value]) > 0:
+        mean_correct_resp_length = np.nanmean(all_data[5][breakdown_value], axis=0)
         iterations = list(range(len(mean_correct_resp_length)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=2, col=3)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=2, col=3)
 
 # Plot Incorrect Resp Length (row 3, col 1)
-for idx, experiment_type in enumerate(experiment_types):
-    if len(all_data[6][experiment_type]) > 0:
-        mean_incorrect_resp_length = np.nanmean(all_data[6][experiment_type], axis=0)
+for idx, breakdown_value in enumerate(breakdown_values):
+    if len(all_data[6][breakdown_value]) > 0:
+        mean_incorrect_resp_length = np.nanmean(all_data[6][breakdown_value], axis=0)
         iterations = list(range(len(mean_incorrect_resp_length)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{experiment_type}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{experiment_type}", showlegend=False, hovertemplate=f'{experiment_type}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][experiment_type]}<extra></extra>'), row=3, col=1)
+        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[7][breakdown_value]}<extra></extra>'), row=3, col=1)
 
 # Update axes labels
 for col in range(1, 4):
@@ -352,11 +390,76 @@ fig.update_layout(height=900, hovermode='closest', legend=dict(orientation="v", 
 
 st.plotly_chart(fig, use_container_width=True)
 
+# Create scatter plot: Uniqueness vs Mean Eval Score (all iterations, averaged by task_id)
+st.subheader("Uniqueness vs Mean Eval Score (All Iterations)")
+scatter_fig = go.Figure()
+
+# Helper function to convert hex color to rgba
+def hex_to_rgba(hex_color, alpha):
+    hex_color = hex_color.lstrip('#')
+    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return f'rgba({r},{g},{b},{alpha})'
+
+for idx, breakdown_value in enumerate(breakdown_values):
+    this_results = [res for res in exp_results if (res["task_id"] == selected_task_id or selected_task_id == "all") and res["breakdown_value"] == breakdown_value]
+    this_results = [res for res in this_results if matches_filter(res, run_filter)]
+    
+    if len(this_results) > 0:
+        # Group by task_id
+        task_groups = defaultdict(list)
+        for res in this_results:
+            task_groups[res["task_id"]].append(res)
+        
+        base_color = colors[idx % len(colors)]
+        line_color = hex_to_rgba(base_color, 0.3)
+        
+        # Collect all scatter points and compute average trajectory
+        all_uniqueness_by_iter = [[] for _ in range(max_iter)]
+        all_scores_by_iter = [[] for _ in range(max_iter)]
+        
+        # For each task_id, average across runs and collect points
+        for task_id, task_results in task_groups.items():
+            for iter_idx in range(max_iter):
+                uniqueness_at_iter = [res["uniqueness"][iter_idx] if iter_idx < len(res["uniqueness"]) else res["uniqueness"][-1] for res in task_results]
+                score_at_iter = [res["mean_eval_score"][iter_idx] if iter_idx < len(res["mean_eval_score"]) else res["mean_eval_score"][-1] for res in task_results]
+                
+                avg_uniqueness = np.nanmean(uniqueness_at_iter)
+                avg_score = np.nanmean(score_at_iter)
+                
+                all_uniqueness_by_iter[iter_idx].append(avg_uniqueness)
+                all_scores_by_iter[iter_idx].append(avg_score)
+        
+        # Flatten for scatter plot
+        all_scatter_x = [val for iter_vals in all_uniqueness_by_iter for val in iter_vals]
+        all_scatter_y = [val for iter_vals in all_scores_by_iter for val in iter_vals]
+        
+        # Add scatter points for all task_ids
+        scatter_fig.add_trace(go.Scatter(x=all_scatter_x, y=all_scatter_y, mode='markers', name=f"{breakdown_value}", marker=dict(color=base_color, size=6, opacity=0.4), legendgroup=f"exp{breakdown_value}", showlegend=True, hovertemplate=f'{breakdown_value}<br>Uniqueness: %{{x:.3f}}<br>Score: %{{y:.3f}}<extra></extra>'))
+        
+        # Compute average trajectory across all task_ids
+        avg_trajectory_x = [np.nanmean(vals) for vals in all_uniqueness_by_iter]
+        avg_trajectory_y = [np.nanmean(vals) for vals in all_scores_by_iter]
+        
+        # Add average trajectory line
+        scatter_fig.add_trace(go.Scatter(x=avg_trajectory_x, y=avg_trajectory_y, mode='lines', name=f"{breakdown_value} (avg)", line=dict(color=base_color, width=2.5), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value} avg<br>Uniqueness: %{{x:.3f}}<br>Score: %{{y:.3f}}<extra></extra>'))
+        
+        # Add arrow markers at intervals to show direction
+        arrow_interval = max(1, len(avg_trajectory_x) // 5)
+        for i in range(arrow_interval, len(avg_trajectory_x), arrow_interval):
+            if i > 0:
+                scatter_fig.add_annotation(x=avg_trajectory_x[i], y=avg_trajectory_y[i], ax=avg_trajectory_x[i-1], ay=avg_trajectory_y[i-1], xref='x', yref='y', axref='x', ayref='y', showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor=base_color)
+
+scatter_fig.update_layout(xaxis_title="Uniqueness", yaxis_title="Mean Eval Score", height=500, hovermode='closest', legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02))
+scatter_fig.update_xaxes(range=[0, 1])
+scatter_fig.update_yaxes(range=[0, 1])
+
+st.plotly_chart(scatter_fig, use_container_width=True)
+
 # Display run counts
 st.subheader("Run Counts")
-for experiment_type in experiment_types:
-    count = all_data[7][experiment_type]
-    st.markdown(f"- {experiment_type}: **{count}** runs")
+for breakdown_value in breakdown_values:
+    count = all_data[7][breakdown_value]
+    st.markdown(f"- {breakdown_value}: **{count}** runs")
 
 # Summary statistics
 st.subheader("Summary Statistics")
