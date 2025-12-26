@@ -16,13 +16,20 @@ params = [
     # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 256},
     # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 512},
 
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-4},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-4},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-3},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-3},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-2},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-2},
-    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-1},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-4},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-4},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-3},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-3},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-2},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 5e-2},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 128, "learning_rate": 1e-1},
+
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-4},
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 5e-4},
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-3},
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 5e-3},
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 5e-2},
 
 ]
 
