@@ -7,6 +7,7 @@ from utils_tmux import start_gen_and_eval_sessions
 from concurrent.futures import ThreadPoolExecutor
 from utils_experiments import make_exp_folder
 from backprop_worker import BackpropWorker
+from utils_code import canonicalize_code
 from tasks import get_task
 
 def extract_answer(response):
@@ -122,24 +123,25 @@ while True:
 
     for response in training_responses + evaluation_responses:
         response["answer"] = extract_answer(response["response_text"])
-        response["answer2"] = re.sub(r'(\"\"\".*?\"\"\"|\'\'\'.*?\'\'\'|#.*?$)', '', response["answer"], flags=re.DOTALL | re.MULTILINE)
-        response["answer2"] = "\n".join([line for line in response["answer2"].split("\n") if line.strip()]) # remove any empty lines
+        response["answer2"] = canonicalize_code(response["answer"])
+        response["token_nll"] = - response["logprobs"] / len(response["response_tokens"])
 
     # compute the uniqueness of the answers
     unique_answers = set([response["answer2"] for response in evaluation_responses])
 
     unique_correct_answers = sorted(set([response["answer2"] for response in evaluation_responses if response["score"] == 1]))
 
-    response_logprobs = [response["logprobs"] for response in evaluation_responses]
-    correct_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] == 1]
-    incorrect_logprobs = [response["logprobs"] for response in evaluation_responses if response["score"] != 1]
-    correct_resp_length = [len(response["response_tokens"]) for response in evaluation_responses if response["score"] == 1]
-    incorrect_resp_length = [len(response["response_tokens"]) for response in evaluation_responses if response["score"] != 1]
+    correct_responses = [response for response in evaluation_responses if response["score"] == 1]
+    incorrect_responses = [response for response in evaluation_responses if response["score"] != 1]
 
-    mean_correct_resp_length = np.mean(correct_resp_length)
-    mean_incorrect_resp_length = np.mean(incorrect_resp_length)
-    # print("RESPONSE LOGPROBS:")
-    # print(response_logprobs)
+    correct_logprobs = np.mean([response["logprobs"] for response in correct_responses])
+    incorrect_logprobs = np.mean([response["logprobs"] for response in incorrect_responses])
+
+    correct_token_nll = np.mean([response["token_nll"] for response in correct_responses])
+    incorrect_token_nll = np.mean([response["token_nll"] for response in incorrect_responses])
+
+    correct_resp_length = np.mean([len(response["response_tokens"]) for response in correct_responses])
+    incorrect_resp_length = np.mean([len(response["response_tokens"]) for response in incorrect_responses])
 
     mean_train_score = np.mean([response["score"] for response in training_responses])
     mean_eval_score = np.mean([response["score"] for response in evaluation_responses])
@@ -188,7 +190,14 @@ while True:
 
     total_iteration_time = time.time() - iteration_start_time
     
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses), "uniqueness": uniqueness, "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs, "mean_correct_resp_length": mean_correct_resp_length, "mean_incorrect_resp_length": mean_incorrect_resp_length, "num_unique_correct_answers": len(unique_correct_answers), "backprop_error": backprop_error, "backprop_error_type": backprop_error_type, "timings/load_genserv": load_time, "timings/training_phase": training_time, "timings/evaluation_phase": evaluation_time, "timings/unload_genserv": unload_time, "timings/backprop": backprop_time, "timings/total_iteration": total_iteration_time}
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses),
+    "uniqueness": uniqueness, "num_unique_correct_answers": len(unique_correct_answers),
+ 
+    "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs,
+    "correct_resp_length": correct_resp_length, "incorrect_resp_length": incorrect_resp_length,
+    "correct_token_nll": correct_token_nll, "incorrect_token_nll": incorrect_token_nll,
+
+    "backprop_error": backprop_error, "backprop_error_type": backprop_error_type, "timings/load_genserv": load_time, "timings/training_phase": training_time, "timings/evaluation_phase": evaluation_time, "timings/unload_genserv": unload_time, "timings/backprop": backprop_time, "timings/total_iteration": total_iteration_time}
     log_entry.update(backprop_results_stats)
 
     with open(logs_path, "a") as f:
