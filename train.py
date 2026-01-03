@@ -7,7 +7,7 @@ from utils_tmux import start_gen_and_eval_sessions
 from concurrent.futures import ThreadPoolExecutor
 from utils_experiments import make_exp_folder
 from backprop_worker import BackpropWorker
-from utils_code import canonicalize_code
+from utils_code import canonicalize_code, normalize_whitespace, strip_comments, format_normalize
 from tasks import get_task
 
 def extract_answer(response):
@@ -122,14 +122,21 @@ while True:
     # responses = evaluation_responses + training_responses
 
     for response in training_responses + evaluation_responses:
-        response["answer"] = extract_answer(response["response_text"])
-        response["answer2"] = canonicalize_code(response["answer"])
+        response["answer_raw"] = extract_answer(response["response_text"])
+        response["answer_ws_norm"] = normalize_whitespace(response["answer_raw"])
+        response["answer_no_comment"] = strip_comments(response["answer_raw"])
+        response["answer_formatted"] = format_normalize(response["answer_raw"])
+        response["answer_ast"] = canonicalize_code(response["answer_raw"])
         response["token_nll"] = - response["logprobs"] / len(response["response_tokens"])
 
-    # compute the uniqueness of the answers
-    unique_answers = set([response["answer2"] for response in evaluation_responses])
+    # compute the uniqueness of the answers at all levels
+    unique_raw = set([response["answer_raw"] for response in evaluation_responses])
+    unique_ws_norm = set([response["answer_ws_norm"] for response in evaluation_responses])
+    unique_no_comment = set([response["answer_no_comment"] for response in evaluation_responses])
+    unique_formatted = set([response["answer_formatted"] for response in evaluation_responses])
+    unique_ast = set([response["answer_ast"] for response in evaluation_responses])
 
-    unique_correct_answers = sorted(set([response["answer2"] for response in evaluation_responses if response["score"] == 1]))
+    unique_correct_answers = sorted(set([response["answer_ast"] for response in evaluation_responses if response["score"] == 1]))
 
     correct_responses = [response for response in evaluation_responses if response["score"] == 1]
     incorrect_responses = [response for response in evaluation_responses if response["score"] != 1]
@@ -145,9 +152,22 @@ while True:
 
     mean_train_score = np.mean([response["score"] for response in training_responses])
     mean_eval_score = np.mean([response["score"] for response in evaluation_responses])
-    uniqueness = 100.0 * len(unique_answers) / len(evaluation_responses)
+    
+    # Calculate uniqueness percentages for each level
+    uniqueness_raw = 100.0 * len(unique_raw) / len(evaluation_responses)
+    uniqueness_ws_norm = 100.0 * len(unique_ws_norm) / len(evaluation_responses)
+    uniqueness_no_comment = 100.0 * len(unique_no_comment) / len(evaluation_responses)
+    uniqueness_formatted = 100.0 * len(unique_formatted) / len(evaluation_responses)
+    uniqueness_ast = 100.0 * len(unique_ast) / len(evaluation_responses)
+    
     print_colored(f"Mean train score: {mean_train_score}", "green")
-    print_colored(f"Mean eval score: {mean_eval_score} (Uniqueness: {len(unique_answers) / len(evaluation_responses)} ({uniqueness:.2f}))", "green")
+    print_colored(f"Mean eval score: {mean_eval_score}", "green")
+    print_colored(f"Uniqueness levels:", "green")
+    print_colored(f"  Raw: {uniqueness_raw:.2f}% ({len(unique_raw)}/{len(evaluation_responses)})", "green")
+    print_colored(f"  WS-Normalized: {uniqueness_ws_norm:.2f}% ({len(unique_ws_norm)}/{len(evaluation_responses)})", "green")
+    print_colored(f"  No-Comments: {uniqueness_no_comment:.2f}% ({len(unique_no_comment)}/{len(evaluation_responses)})", "green")
+    print_colored(f"  Formatted: {uniqueness_formatted:.2f}% ({len(unique_formatted)}/{len(evaluation_responses)})", "green")
+    print_colored(f"  AST: {uniqueness_ast:.2f}% ({len(unique_ast)}/{len(evaluation_responses)})", "green")
 
     # Step 1c: Unload the model
     unload_start_time = time.time()
@@ -190,8 +210,11 @@ while True:
 
     total_iteration_time = time.time() - iteration_start_time
     
-    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "unique_answers": len(unique_answers), "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses),
-    "uniqueness": uniqueness, "num_unique_correct_answers": len(unique_correct_answers),
+    log_entry = {"iteration": iteration, "mean_train_score": mean_train_score, "mean_eval_score": mean_eval_score, "num_eval_responses": len(evaluation_responses), "num_train_responses": len(training_responses),
+    
+    "unique_count_raw": len(unique_raw), "unique_count_ws_norm": len(unique_ws_norm), "unique_count_no_comment": len(unique_no_comment), "unique_count_formatted": len(unique_formatted), "unique_count_ast": len(unique_ast),
+    "uniqueness_raw": uniqueness_raw, "uniqueness_ws_norm": uniqueness_ws_norm, "uniqueness_no_comment": uniqueness_no_comment, "uniqueness_formatted": uniqueness_formatted, "uniqueness_ast": uniqueness_ast,
+    "num_unique_correct_answers": len(unique_correct_answers),
  
     "correct_logprobs": correct_logprobs, "incorrect_logprobs": incorrect_logprobs,
     "correct_resp_length": correct_resp_length, "incorrect_resp_length": incorrect_resp_length,

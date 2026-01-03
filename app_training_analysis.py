@@ -273,18 +273,13 @@ st.markdown(filter_info)
 
 # Process data for plots
 def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dict):
-    all_mean_eval_scores, all_uniquenesses, all_num_correct_answers = {}, {}, {}
-    all_correct_logprobs, all_incorrect_logprobs = {}, {}
-    all_correct_resp_length, all_incorrect_resp_length = {}, {}
-    all_correct_token_nll, all_incorrect_token_nll = {}, {}
+    # Define metrics configuration
+    metric_keys = ["mean_eval_score", "uniqueness", "num_unique_correct_answers", "correct_logprobs", "incorrect_logprobs", "mean_correct_resp_length", "mean_incorrect_resp_length", "correct_token_nll", "incorrect_token_nll"]
+    
+    all_metrics = {key: {} for key in metric_keys}
     run_counts = {}
     
     for breakdown_value in breakdown_values:
-        all_mean_eval_scores[breakdown_value], all_uniquenesses[breakdown_value] = [], []
-        all_num_correct_answers[breakdown_value] = []
-        all_correct_logprobs[breakdown_value], all_incorrect_logprobs[breakdown_value] = [], []
-        all_correct_resp_length[breakdown_value], all_incorrect_resp_length[breakdown_value] = [], []
-        all_correct_token_nll[breakdown_value], all_incorrect_token_nll[breakdown_value] = [], []
         this_results = [res for res in exp_results if (res["task_id"] == task_id or task_id == "all") and res["breakdown_value"] == breakdown_value]
         
         # Apply run filter
@@ -295,54 +290,34 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
         
         run_counts[breakdown_value] = len(this_results)
         
+        # Group by task_id for equal weighting
+        task_groups = defaultdict(list)
         for res in this_results:
-            mean_eval_score = res["mean_eval_score"][:max_iterations]
-            if len(mean_eval_score) < max_iterations:
-                mean_eval_score += [mean_eval_score[-1]] * (max_iterations - len(mean_eval_score))
+            task_groups[res["task_id"]].append(res)
+        
+        # Initialize task-averaged lists for each metric
+        task_averaged_metrics = {key: [] for key in metric_keys}
+        
+        for task_id_key, task_results in task_groups.items():
+            # Collect all runs for this task_id
+            task_metrics = {key: [] for key in metric_keys}
             
-            uniqueness = res["uniqueness"][:max_iterations]
-            if len(uniqueness) < max_iterations:
-                uniqueness += [uniqueness[-1]] * (max_iterations - len(uniqueness))
+            for res in task_results:
+                for key in metric_keys:
+                    metric_values = res[key][:max_iterations]
+                    if len(metric_values) < max_iterations:
+                        metric_values += [metric_values[-1]] * (max_iterations - len(metric_values))
+                    task_metrics[key].append(metric_values)
             
-            num_correct_answers = res["num_unique_correct_answers"][:max_iterations]
-            if len(num_correct_answers) < max_iterations:
-                num_correct_answers += [num_correct_answers[-1]] * (max_iterations - len(num_correct_answers))
-            
-            correct_logprobs = res["correct_logprobs"][:max_iterations]
-            if len(correct_logprobs) < max_iterations:
-                correct_logprobs += [correct_logprobs[-1]] * (max_iterations - len(correct_logprobs))
-            
-            incorrect_logprobs = res["incorrect_logprobs"][:max_iterations]
-            if len(incorrect_logprobs) < max_iterations:
-                incorrect_logprobs += [incorrect_logprobs[-1]] * (max_iterations - len(incorrect_logprobs))
-            
-            correct_resp_length = res["mean_correct_resp_length"][:max_iterations]
-            if len(correct_resp_length) < max_iterations:
-                correct_resp_length += [correct_resp_length[-1]] * (max_iterations - len(correct_resp_length))
-            
-            incorrect_resp_length = res["mean_incorrect_resp_length"][:max_iterations]
-            if len(incorrect_resp_length) < max_iterations:
-                incorrect_resp_length += [incorrect_resp_length[-1]] * (max_iterations - len(incorrect_resp_length))
-            
-            correct_token_nll_vals = res["correct_token_nll"][:max_iterations]
-            if len(correct_token_nll_vals) < max_iterations:
-                correct_token_nll_vals += [correct_token_nll_vals[-1]] * (max_iterations - len(correct_token_nll_vals))
-            
-            incorrect_token_nll_vals = res["incorrect_token_nll"][:max_iterations]
-            if len(incorrect_token_nll_vals) < max_iterations:
-                incorrect_token_nll_vals += [incorrect_token_nll_vals[-1]] * (max_iterations - len(incorrect_token_nll_vals))
-            
-            all_mean_eval_scores[breakdown_value].append(mean_eval_score)
-            all_uniquenesses[breakdown_value].append(uniqueness)
-            all_num_correct_answers[breakdown_value].append(num_correct_answers)
-            all_correct_logprobs[breakdown_value].append(correct_logprobs)
-            all_incorrect_logprobs[breakdown_value].append(incorrect_logprobs)
-            all_correct_resp_length[breakdown_value].append(correct_resp_length)
-            all_incorrect_resp_length[breakdown_value].append(incorrect_resp_length)
-            all_correct_token_nll[breakdown_value].append(correct_token_nll_vals)
-            all_incorrect_token_nll[breakdown_value].append(incorrect_token_nll_vals)
+            # Average across runs for this task_id
+            for key in metric_keys:
+                task_averaged_metrics[key].append(np.nanmean(task_metrics[key], axis=0))
+        
+        # Store the task-averaged data (will be averaged across task_ids in plotting)
+        for key in metric_keys:
+            all_metrics[key][breakdown_value] = task_averaged_metrics[key]
     
-    return all_mean_eval_scores, all_uniquenesses, all_num_correct_answers, all_correct_logprobs, all_incorrect_logprobs, all_correct_resp_length, all_incorrect_resp_length, all_correct_token_nll, all_incorrect_token_nll, run_counts
+    return all_metrics["mean_eval_score"], all_metrics["uniqueness"], all_metrics["num_unique_correct_answers"], all_metrics["correct_logprobs"], all_metrics["incorrect_logprobs"], all_metrics["mean_correct_resp_length"], all_metrics["mean_incorrect_resp_length"], all_metrics["correct_token_nll"], all_metrics["incorrect_token_nll"], run_counts
 
 # Process data for all runs
 all_data = process_data_for_plots(selected_task_id, False, max_iter, run_filter)
