@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser()
 
 # Basics
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
-parser.add_argument("--base_model", type=str, default="microsoft/phi-4")
+parser.add_argument("--base_model", type=str, default="Qwen/Qwen3-14b")
 parser.add_argument("--task_id", type=str, default="sharded-livecodebench/2857")
 
 parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree"])
@@ -34,7 +34,7 @@ parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
 
 # Backprop
 parser.add_argument("--backprop_method", type=str, default="grpo", choices=["grpo", "kto", "rej"])
-parser.add_argument("--kto_margin", type=float, default=3.0)
+parser.add_argument("--kto_margin", type=float, default=None)
 parser.add_argument("--advantage_estimation", type=str, default="zero_mean", choices=["zero_mean", "zero_mean_noneg"])
 parser.add_argument("--learning_rate", type=float, default=5e-3)
 parser.add_argument("--batch_size", type=int, default=16)

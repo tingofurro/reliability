@@ -1,6 +1,10 @@
 import random, sys, os
 
+# these were good for Phi-4
 task_ids = ["sharded-livecodebench/2756", "sharded-livecodebench/2755", "sharded-livecodebench/2847", "sharded-livecodebench/2786", "sharded-livecodebench/2791", "sharded-livecodebench/2856", "sharded-livecodebench/2857", "sharded-livecodebench/2866", "sharded-livecodebench/2882", "sharded-livecodebench/2883"]
+
+# these are good for Qwen3-14b
+task_ids = ["sharded-livecodebench/2727", "sharded-livecodebench/2754", "sharded-livecodebench/2756", "sharded-livecodebench/2792", "sharded-livecodebench/2812", "sharded-livecodebench/2828", "sharded-livecodebench/2844", "sharded-livecodebench/2845", "sharded-livecodebench/2855", "sharded-livecodebench/2856"]
 
 learning_rates = [5e-3]
 
