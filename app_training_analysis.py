@@ -80,7 +80,24 @@ def load_experiment_data(experiments_folder, breakdown_key="experiment_type"):
             already_seen_answers |= this_answers
         
         mean_eval_score = [log["mean_eval_score"] for log in exp_logs]
-        uniqueness = [log["uniqueness"]/100.0 for log in exp_logs]
+        
+        # Handle uniqueness metrics - backward compatible
+        # Check if new multi-level uniqueness metrics exist
+        if "uniqueness_ast" in exp_logs[0]:
+            uniqueness_raw = [log.get("uniqueness_raw", 100.0)/100.0 for log in exp_logs]
+            uniqueness_ws_norm = [log.get("uniqueness_ws_norm", 100.0)/100.0 for log in exp_logs]
+            uniqueness_no_comment = [log.get("uniqueness_no_comment", 100.0)/100.0 for log in exp_logs]
+            uniqueness_formatted = [log.get("uniqueness_formatted", 100.0)/100.0 for log in exp_logs]
+            uniqueness_ast = [log.get("uniqueness_ast", 100.0)/100.0 for log in exp_logs]
+            has_multi_uniqueness = True
+        else:
+            # Backward compatible: use old uniqueness field
+            uniqueness_ast = [log.get("uniqueness", 100.0)/100.0 for log in exp_logs]
+            uniqueness_raw = uniqueness_ast
+            uniqueness_ws_norm = uniqueness_ast
+            uniqueness_no_comment = uniqueness_ast
+            uniqueness_formatted = uniqueness_ast
+            has_multi_uniqueness = False
         
         # Handle logprobs - backward compatible (can be list or float)
         correct_logprobs = []
@@ -121,7 +138,12 @@ def load_experiment_data(experiments_folder, breakdown_key="experiment_type"):
         exp_results.append({
             "task_id": task_id,
             "mean_eval_score": mean_eval_score,
-            "uniqueness": uniqueness,
+            "uniqueness_raw": uniqueness_raw,
+            "uniqueness_ws_norm": uniqueness_ws_norm,
+            "uniqueness_no_comment": uniqueness_no_comment,
+            "uniqueness_formatted": uniqueness_formatted,
+            "uniqueness_ast": uniqueness_ast,
+            "has_multi_uniqueness": has_multi_uniqueness,
             "learning_rate": learning_rate,
             "experiment_type": experiment_type,
             "breakdown_value": breakdown_value,
@@ -274,7 +296,7 @@ st.markdown(filter_info)
 # Process data for plots
 def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dict):
     # Define metrics configuration
-    metric_keys = ["mean_eval_score", "uniqueness", "num_unique_correct_answers", "correct_logprobs", "incorrect_logprobs", "mean_correct_resp_length", "mean_incorrect_resp_length", "correct_token_nll", "incorrect_token_nll"]
+    metric_keys = ["mean_eval_score", "uniqueness_raw", "uniqueness_ws_norm", "uniqueness_no_comment", "uniqueness_formatted", "uniqueness_ast", "num_unique_correct_answers", "correct_logprobs", "incorrect_logprobs", "mean_correct_resp_length", "mean_incorrect_resp_length", "correct_token_nll", "incorrect_token_nll"]
     
     all_metrics = {key: {} for key in metric_keys}
     run_counts = {}
@@ -317,98 +339,215 @@ def process_data_for_plots(task_id, success_only, max_iterations, run_filter_dic
         for key in metric_keys:
             all_metrics[key][breakdown_value] = task_averaged_metrics[key]
     
-    return all_metrics["mean_eval_score"], all_metrics["uniqueness"], all_metrics["num_unique_correct_answers"], all_metrics["correct_logprobs"], all_metrics["incorrect_logprobs"], all_metrics["mean_correct_resp_length"], all_metrics["mean_incorrect_resp_length"], all_metrics["correct_token_nll"], all_metrics["incorrect_token_nll"], run_counts
+    return all_metrics["mean_eval_score"], all_metrics["uniqueness_raw"], all_metrics["uniqueness_ws_norm"], all_metrics["uniqueness_no_comment"], all_metrics["uniqueness_formatted"], all_metrics["uniqueness_ast"], all_metrics["num_unique_correct_answers"], all_metrics["correct_logprobs"], all_metrics["incorrect_logprobs"], all_metrics["mean_correct_resp_length"], all_metrics["mean_incorrect_resp_length"], all_metrics["correct_token_nll"], all_metrics["incorrect_token_nll"], run_counts
 
 # Process data for all runs
 all_data = process_data_for_plots(selected_task_id, False, max_iter, run_filter)
 
-# Create 3x3 subplot
-fig = make_subplots(rows=3, cols=3, subplot_titles=("Mean Eval Scores", "Uniqueness", "Num Unique Correct Answers", "Correct Logprobs", "Incorrect Logprobs", "Correct Resp Length", "Incorrect Resp Length", "Correct Token NLL", "Incorrect Token NLL"), vertical_spacing=0.12, horizontal_spacing=0.08)
+# Check if we have multi-level uniqueness data
+has_multi_uniqueness = any(res.get("has_multi_uniqueness", False) for res in exp_results)
+
+# Create subplot layout based on whether we have multi-level uniqueness
+if has_multi_uniqueness:
+    # 5x3 layout for all metrics including 5 uniqueness measures
+    fig = make_subplots(rows=5, cols=3, subplot_titles=("Mean Eval Scores", "Uniqueness Raw", "Uniqueness WS-Norm", "Uniqueness No-Comment", "Uniqueness Formatted", "Uniqueness AST", "Num Unique Correct", "Correct Logprobs", "Incorrect Logprobs", "Correct Resp Length", "Incorrect Resp Length", "Correct Token NLL", "Incorrect Token NLL"), vertical_spacing=0.08, horizontal_spacing=0.08)
+else:
+    # 3x3 layout for backward compatibility
+    fig = make_subplots(rows=3, cols=3, subplot_titles=("Mean Eval Scores", "Uniqueness", "Num Unique Correct Answers", "Correct Logprobs", "Incorrect Logprobs", "Correct Resp Length", "Incorrect Resp Length", "Correct Token NLL", "Incorrect Token NLL"), vertical_spacing=0.12, horizontal_spacing=0.08)
 
 # Colors for experiment types
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
-# Plot Mean Eval Scores (row 1, col 1)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[0][breakdown_value]) > 0:
-        mean_scores = np.nanmean(all_data[0][breakdown_value], axis=0)
-        iterations = list(range(len(mean_scores)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=True, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=1, col=1)
+if has_multi_uniqueness:
+    # NEW LAYOUT: 5x3 with separate uniqueness plots
+    # Row 1: Mean Eval Scores, Uniqueness Raw, Uniqueness WS-Norm
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[0][breakdown_value]) > 0:
+            mean_scores = np.nanmean(all_data[0][breakdown_value], axis=0)
+            iterations = list(range(len(mean_scores)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=True, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=1)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[1][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[1][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=2)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[2][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[2][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=3)
+    
+    # Row 2: Uniqueness No-Comment, Uniqueness Formatted, Uniqueness AST
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[3][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[3][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=1)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[4][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[4][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=2)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[5][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[5][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=3)
+    
+    # Row 3: Num Unique Correct, Correct Logprobs, Incorrect Logprobs
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[6][breakdown_value]) > 0:
+            mean_num_correct = np.nanmean(all_data[6][breakdown_value], axis=0)
+            iterations = list(range(len(mean_num_correct)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=1)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[7][breakdown_value]) > 0:
+            mean_correct_logprobs = np.nanmean(all_data[7][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_logprobs)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=2)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[8][breakdown_value]) > 0:
+            mean_incorrect_logprobs = np.nanmean(all_data[8][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_logprobs)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=3)
+    
+    # Row 4: Correct Resp Length, Incorrect Resp Length, Correct Token NLL
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[9][breakdown_value]) > 0:
+            mean_correct_resp_length = np.nanmean(all_data[9][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_resp_length)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=4, col=1)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[10][breakdown_value]) > 0:
+            mean_incorrect_resp_length = np.nanmean(all_data[10][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_resp_length)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=4, col=2)
+    
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[11][breakdown_value]) > 0:
+            mean_correct_token_nll = np.nanmean(all_data[11][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_token_nll)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=4, col=3)
+    
+    # Row 5: Incorrect Token NLL
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[12][breakdown_value]) > 0:
+            mean_incorrect_token_nll = np.nanmean(all_data[12][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_token_nll)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=5, col=1)
+    
+else:
+    # BACKWARD COMPATIBLE LAYOUT: 3x3
+    # Plot Mean Eval Scores (row 1, col 1)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[0][breakdown_value]) > 0:
+            mean_scores = np.nanmean(all_data[0][breakdown_value], axis=0)
+            iterations = list(range(len(mean_scores)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_scores, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=True, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Score: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=1)
 
-# Plot Uniqueness (row 1, col 2)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[1][breakdown_value]) > 0:
-        mean_uniqueness = np.nanmean(all_data[1][breakdown_value], axis=0)
-        iterations = list(range(len(mean_uniqueness)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=1, col=2)
+    # Plot Uniqueness (row 1, col 2) - single uniqueness (AST level)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[5][breakdown_value]) > 0:
+            mean_uniqueness = np.nanmean(all_data[5][breakdown_value], axis=0)
+            iterations = list(range(len(mean_uniqueness)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_uniqueness, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Uniqueness: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=2)
 
-# Plot Num Unique Correct Answers (row 1, col 3)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[2][breakdown_value]) > 0:
-        mean_num_correct = np.nanmean(all_data[2][breakdown_value], axis=0)
-        iterations = list(range(len(mean_num_correct)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=1, col=3)
+    # Plot Num Unique Correct Answers (row 1, col 3)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[6][breakdown_value]) > 0:
+            mean_num_correct = np.nanmean(all_data[6][breakdown_value], axis=0)
+            iterations = list(range(len(mean_num_correct)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_num_correct, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Count: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=1, col=3)
 
-# Plot Correct Logprobs (row 2, col 1)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[3][breakdown_value]) > 0:
-        mean_correct_logprobs = np.nanmean(all_data[3][breakdown_value], axis=0)
-        iterations = list(range(len(mean_correct_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=2, col=1)
+    # Plot Correct Logprobs (row 2, col 1)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[7][breakdown_value]) > 0:
+            mean_correct_logprobs = np.nanmean(all_data[7][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_logprobs)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=1)
 
-# Plot Incorrect Logprobs (row 2, col 2)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[4][breakdown_value]) > 0:
-        mean_incorrect_logprobs = np.nanmean(all_data[4][breakdown_value], axis=0)
-        iterations = list(range(len(mean_incorrect_logprobs)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=2, col=2)
+    # Plot Incorrect Logprobs (row 2, col 2)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[8][breakdown_value]) > 0:
+            mean_incorrect_logprobs = np.nanmean(all_data[8][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_logprobs)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_logprobs, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Logprob: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=2)
 
-# Plot Correct Resp Length (row 2, col 3)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[5][breakdown_value]) > 0:
-        mean_correct_resp_length = np.nanmean(all_data[5][breakdown_value], axis=0)
-        iterations = list(range(len(mean_correct_resp_length)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=2, col=3)
+    # Plot Correct Resp Length (row 2, col 3)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[9][breakdown_value]) > 0:
+            mean_correct_resp_length = np.nanmean(all_data[9][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_resp_length)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=2, col=3)
 
-# Plot Incorrect Resp Length (row 3, col 1)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[6][breakdown_value]) > 0:
-        mean_incorrect_resp_length = np.nanmean(all_data[6][breakdown_value], axis=0)
-        iterations = list(range(len(mean_incorrect_resp_length)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=3, col=1)
+    # Plot Incorrect Resp Length (row 3, col 1)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[10][breakdown_value]) > 0:
+            mean_incorrect_resp_length = np.nanmean(all_data[10][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_resp_length)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_resp_length, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>Length: %{{y:.1f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=1)
 
-# Plot Correct Token NLL (row 3, col 2)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[7][breakdown_value]) > 0:
-        mean_correct_token_nll = np.nanmean(all_data[7][breakdown_value], axis=0)
-        iterations = list(range(len(mean_correct_token_nll)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_correct_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=3, col=2)
+    # Plot Correct Token NLL (row 3, col 2)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[11][breakdown_value]) > 0:
+            mean_correct_token_nll = np.nanmean(all_data[11][breakdown_value], axis=0)
+            iterations = list(range(len(mean_correct_token_nll)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_correct_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=2)
 
-# Plot Incorrect Token NLL (row 3, col 3)
-for idx, breakdown_value in enumerate(breakdown_values):
-    if len(all_data[8][breakdown_value]) > 0:
-        mean_incorrect_token_nll = np.nanmean(all_data[8][breakdown_value], axis=0)
-        iterations = list(range(len(mean_incorrect_token_nll)))
-        fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[9][breakdown_value]}<extra></extra>'), row=3, col=3)
+    # Plot Incorrect Token NLL (row 3, col 3)
+    for idx, breakdown_value in enumerate(breakdown_values):
+        if len(all_data[12][breakdown_value]) > 0:
+            mean_incorrect_token_nll = np.nanmean(all_data[12][breakdown_value], axis=0)
+            iterations = list(range(len(mean_incorrect_token_nll)))
+            fig.add_trace(go.Scatter(x=iterations, y=mean_incorrect_token_nll, mode='lines', name=f"{breakdown_value}", line=dict(color=colors[idx % len(colors)]), legendgroup=f"exp{breakdown_value}", showlegend=False, hovertemplate=f'{breakdown_value}<br>Iteration: %{{x}}<br>NLL: %{{y:.3f}}<br>Runs: {all_data[13][breakdown_value]}<extra></extra>'), row=3, col=3)
 
-# Update axes labels
-for col in range(1, 4):
-    fig.update_xaxes(title_text="Iteration", row=1, col=col)
-    fig.update_xaxes(title_text="Iteration", row=2, col=col)
-    fig.update_xaxes(title_text="Iteration", row=3, col=col)
+# Update axes labels and layout based on whether we have multi-level uniqueness
+if has_multi_uniqueness:
+    # 5x3 layout
+    for col in range(1, 4):
+        for row in range(1, 6):
+            fig.update_xaxes(title_text="Iteration", row=row, col=col)
+    
+    fig.update_yaxes(title_text="Score", range=[0, 1], row=1, col=1)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=1, col=2)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=1, col=3)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=2, col=1)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=2, col=2)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=2, col=3)
+    fig.update_yaxes(title_text="Count", row=3, col=1)
+    fig.update_yaxes(title_text="Log Prob", row=3, col=2)
+    fig.update_yaxes(title_text="Log Prob", row=3, col=3)
+    fig.update_yaxes(title_text="Length", row=4, col=1)
+    fig.update_yaxes(title_text="Length", row=4, col=2)
+    fig.update_yaxes(title_text="NLL", row=4, col=3)
+    fig.update_yaxes(title_text="NLL", row=5, col=1)
+    
+    fig.update_layout(height=1400, hovermode='closest', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
+else:
+    # 3x3 layout
+    for col in range(1, 4):
+        fig.update_xaxes(title_text="Iteration", row=1, col=col)
+        fig.update_xaxes(title_text="Iteration", row=2, col=col)
+        fig.update_xaxes(title_text="Iteration", row=3, col=col)
 
-fig.update_yaxes(title_text="Mean Eval Score", range=[0, 1], row=1, col=1)
-fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=1, col=2)
-fig.update_yaxes(title_text="Count", row=1, col=3)
-fig.update_yaxes(title_text="Log Prob", row=2, col=1)
-fig.update_yaxes(title_text="Log Prob", row=2, col=2)
-fig.update_yaxes(title_text="Length", row=2, col=3)
-fig.update_yaxes(title_text="Length", row=3, col=1)
-fig.update_yaxes(title_text="NLL", row=3, col=2)
-fig.update_yaxes(title_text="NLL", row=3, col=3)
+    fig.update_yaxes(title_text="Mean Eval Score", range=[0, 1], row=1, col=1)
+    fig.update_yaxes(title_text="Uniqueness", range=[0, 1], row=1, col=2)
+    fig.update_yaxes(title_text="Count", row=1, col=3)
+    fig.update_yaxes(title_text="Log Prob", row=2, col=1)
+    fig.update_yaxes(title_text="Log Prob", row=2, col=2)
+    fig.update_yaxes(title_text="Length", row=2, col=3)
+    fig.update_yaxes(title_text="Length", row=3, col=1)
+    fig.update_yaxes(title_text="NLL", row=3, col=2)
+    fig.update_yaxes(title_text="NLL", row=3, col=3)
 
-# Update layout
-fig.update_layout(height=900, hovermode='closest', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
+    fig.update_layout(height=900, hovermode='closest', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -442,7 +581,8 @@ for idx, breakdown_value in enumerate(breakdown_values):
         # For each task_id, average across runs and collect points
         for task_id, task_results in task_groups.items():
             for iter_idx in range(max_iter):
-                uniqueness_at_iter = [res["uniqueness"][iter_idx] if iter_idx < len(res["uniqueness"]) else res["uniqueness"][-1] for res in task_results]
+                # Use AST-level uniqueness for scatter plot
+                uniqueness_at_iter = [res["uniqueness_ast"][iter_idx] if iter_idx < len(res["uniqueness_ast"]) else res["uniqueness_ast"][-1] for res in task_results]
                 score_at_iter = [res["mean_eval_score"][iter_idx] if iter_idx < len(res["mean_eval_score"]) else res["mean_eval_score"][-1] for res in task_results]
                 
                 avg_uniqueness = np.nanmean(uniqueness_at_iter)
@@ -480,7 +620,7 @@ st.plotly_chart(scatter_fig, use_container_width=True)
 # Display run counts
 st.subheader("Run Counts")
 for breakdown_value in breakdown_values:
-    count = all_data[9][breakdown_value]
+    count = all_data[13][breakdown_value]
     st.markdown(f"- {breakdown_value}: **{count}** runs")
 
 # Summary statistics
