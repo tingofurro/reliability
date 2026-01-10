@@ -124,6 +124,8 @@ def generate_priority_tree_responses(assistant_gen_client, eval_client, sample, 
     print(f"\033[92mTree building completed in {time.time() - T:.2f} seconds\033[0m")
 
     T_eval_start = time.time()
+    active_eval_job_ids = []
+    eval_job_id2response = {}
     evaluations = [{"conversation": conversation + [{"role": "assistant", "content": response["response_text"]}], "task_name": sample["task"], "sample": sample} for response in full_tree]
     batch_result = eval_client.schedule_evaluation_batch(evaluations)
     for i, eval_job_id in enumerate(batch_result["job_ids"]):
