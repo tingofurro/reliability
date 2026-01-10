@@ -3,9 +3,6 @@ import random, sys, os
 # these were good for Phi-4
 task_ids = ["sharded-livecodebench/2756", "sharded-livecodebench/2755", "sharded-livecodebench/2847", "sharded-livecodebench/2786", "sharded-livecodebench/2791", "sharded-livecodebench/2856", "sharded-livecodebench/2857", "sharded-livecodebench/2866", "sharded-livecodebench/2882", "sharded-livecodebench/2883"]
 
-# these are good for Qwen3-14b
-task_ids = ["sharded-livecodebench/2727", "sharded-livecodebench/2754", "sharded-livecodebench/2756", "sharded-livecodebench/2792", "sharded-livecodebench/2812", "sharded-livecodebench/2828", "sharded-livecodebench/2844", "sharded-livecodebench/2845", "sharded-livecodebench/2855", "sharded-livecodebench/2856"]
-
 learning_rates = [5e-3]
 
 params = [
@@ -35,9 +32,15 @@ params = [
     # {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 2e-2},
     # {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 5e-2},
 
-    {"backprop_method": "grpo", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+    # {"backprop_method": "grpo", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+    # {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+    # {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+
     {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
-    {"backprop_method": "kto", "sample_strategy": "iid", "group_size": 512, "learning_rate": 1e-2},
+    {"backprop_method": "rej", "sample_strategy": "iid", "group_size": 1024, "learning_rate": 1e-2},    
+    {"backprop_method": "rej", "sample_strategy": "prio", "group_size": 512, "learning_rate": 1e-2},
+    {"backprop_method": "rej", "sample_strategy": "prio", "group_size": 1024, "learning_rate": 1e-2},
+    {"backprop_method": "rej", "sample_strategy": "prio", "group_size": 2048, "learning_rate": 1e-2},
 
 ]
 

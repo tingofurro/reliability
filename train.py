@@ -1,4 +1,4 @@
-from utils_rollout import generate_responses, generate_tree_responses
+from utils_rollout import generate_responses, generate_tree_responses, generate_priority_tree_responses
 import argparse, json, torch, time, numpy as np, re, os, tqdm
 from utils import print_colored, DoublePrint, get_git_version
 from llms.genserv.client import GenerationServiceClient
@@ -21,10 +21,10 @@ parser = argparse.ArgumentParser()
 
 # Basics
 parser.add_argument("--dataset_fn", type=str, default="data/sharded_instructions_600.json")
-parser.add_argument("--base_model", type=str, default="Qwen/Qwen3-14b")
+parser.add_argument("--base_model", type=str, default="microsoft/phi-4") # Qwen/Qwen3-14b-base
 parser.add_argument("--task_id", type=str, default="sharded-livecodebench/2857")
 
-parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree"])
+parser.add_argument("--sample_strategy", type=str, default="tree", choices=["iid", "tree", "prio"])
 parser.add_argument("--group_size", type=int, default=100)
 parser.add_argument("--tree_degree", type=int, default=2)
 parser.add_argument("--tree_depth", type=int, default=13)
@@ -87,6 +87,8 @@ def run_training_phase(conversation, sample_strategy, group_size, tree_depth, tr
         responses = generate_responses(assistant_gen_client, eval_client, sample, conversation, group_size)
     elif sample_strategy == "tree":
         responses = generate_tree_responses(assistant_gen_client, eval_client, sample, conversation, tree_depth, tree_degree)
+    elif sample_strategy == "prio":
+        responses = generate_priority_tree_responses(assistant_gen_client, eval_client, sample, conversation, group_size)
     return responses
 
 system_message = task.generate_system_prompt(sample)
